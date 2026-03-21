@@ -1,0 +1,59 @@
+#
+# mod-loot-filter configuration
+#
+# Automatic loot filtering — items picked up by mod-auto-loot
+# are checked against per-character filter rules and automatically
+# sold, disenchanted, or destroyed.
+#
+
+########################################
+# General settings
+########################################
+
+#
+#    LootFilter.Enable
+#        Description: Enable the loot filter module
+#        Default:     1 (Enabled)
+#
+
+LootFilter.Enable = 1
+
+#
+#    LootFilter.AllowSell
+#        Description: Allow auto-sell action (vendor price)
+#        Default:     1 (Enabled)
+#
+
+LootFilter.AllowSell = 1
+
+#
+#    LootFilter.AllowDisenchant
+#        Description: Allow auto-disenchant action (requires Enchanting skill)
+#        Default:     1 (Enabled)
+#
+
+LootFilter.AllowDisenchant = 1
+
+#
+#    LootFilter.AllowDelete
+#        Description: Allow auto-delete action (destroy item)
+#        Default:     1 (Enabled)
+#
+
+LootFilter.AllowDelete = 1
+
+#
+#    LootFilter.LogActions
+#        Description: Show chat messages when items are filtered
+#        Default:     1 (Enabled)
+#
+
+LootFilter.LogActions = 1
+
+#
+#    LootFilter.MaxRulesPerChar
+#        Description: Maximum number of filter rules per character
+#        Default:     30
+#
+
+LootFilter.MaxRulesPerChar = 30
