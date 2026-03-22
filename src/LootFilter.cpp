@@ -372,24 +372,24 @@ static void DisenchantItem(Player* player, Item* item)
     // Check if player has enchanting skill
     if (!player->HasSkill(333)) // 333 = Enchanting
     {
-        // Fallback: sell instead
+        if (conf_LogActions)
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff888888[Loot Filter]|r Cannot DE {} (no Enchanting), selling instead.",
+                itemName);
         if (conf_AllowSell)
-        {
             SellItem(player, item);
-            return;
-        }
         return;
     }
 
     // Check if item has a disenchant loot template
     if (proto->DisenchantID == 0)
     {
-        // Not disenchantable, sell instead
+        if (conf_LogActions)
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), selling instead.",
+                itemName);
         if (conf_AllowSell)
-        {
             SellItem(player, item);
-            return;
-        }
         return;
     }
 
@@ -575,14 +575,23 @@ public:
 
         LootFilterAction action = EvaluateFilter(player, item);
 
-        if (action != FILTER_ACTION_KEEP)
+        if (action == FILTER_ACTION_KEEP)
         {
-            // Defer to next tick — item pointer is still in use by loot system
-            player->m_Events.AddEvent(
-                new LootFilterEvent(player, item->GetGUID(), action),
-                player->m_Events.CalculateTime(1));
+            if (conf_LogActions)
+            {
+                ItemTemplate const* proto = item->GetTemplate();
+                if (proto)
+                    ChatHandler(player->GetSession()).PSendSysMessage(
+                        "|cff888888[Loot Filter]|r Keeping [{}].",
+                        proto->Name1);
+            }
             return;
         }
+
+        // Defer to next tick — item pointer is still in use by loot system
+        player->m_Events.AddEvent(
+            new LootFilterEvent(player, item->GetGUID(), action),
+            player->m_Events.CalculateTime(1));
     }
 };
 
