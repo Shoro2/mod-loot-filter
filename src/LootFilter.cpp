@@ -41,6 +41,7 @@ static uint32 conf_MaxRulesPerChar  = 30;
 struct FilterRule
 {
     uint32 ruleId;
+    uint32 ruleGroup;       // 0 = standalone, >0 = AND group
     uint8  conditionType;   // LootFilterCondition
     uint32 conditionValue;  // numeric value for the condition
     std::string conditionStr; // string value (for name contains)
@@ -72,10 +73,11 @@ static std::unordered_map<uint32, PlayerFilterSettings> s_filterSettings;
 static void LoadRulesForPlayer(uint32 guid)
 {
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `ruleId`, `conditionType`, `conditionValue`, "
-        "`conditionStr`, `action`, `priority`, `enabled` "
+        "SELECT `ruleId`, `ruleGroup`, `conditionType`, "
+        "`conditionValue`, `conditionStr`, `action`, "
+        "`priority`, `enabled` "
         "FROM `character_loot_filter` WHERE `characterId` = {} "
-        "ORDER BY `priority` ASC", guid);
+        "ORDER BY `ruleGroup` ASC, `priority` ASC", guid);
 
     std::vector<FilterRule> rules;
     if (result)
@@ -85,12 +87,13 @@ static void LoadRulesForPlayer(uint32 guid)
             Field* fields = result->Fetch();
             FilterRule r;
             r.ruleId        = fields[0].Get<uint32>();
-            r.conditionType = fields[1].Get<uint8>();
-            r.conditionValue = fields[2].Get<uint32>();
-            r.conditionStr  = fields[3].Get<std::string>();
-            r.action        = fields[4].Get<uint8>();
-            r.priority      = fields[5].Get<uint8>();
-            r.enabled       = fields[6].Get<bool>();
+            r.ruleGroup     = fields[1].Get<uint32>();
+            r.conditionType = fields[2].Get<uint8>();
+            r.conditionValue = fields[3].Get<uint32>();
+            r.conditionStr  = fields[4].Get<std::string>();
+            r.action        = fields[5].Get<uint8>();
+            r.priority      = fields[6].Get<uint8>();
+            r.enabled       = fields[7].Get<bool>();
             rules.push_back(r);
         } while (result->NextRow());
     }
@@ -213,6 +216,17 @@ static bool MatchesCondition(FilterRule const& rule,
     }
 }
 
+static bool IsActionAllowed(uint8 action)
+{
+    if (action == FILTER_ACTION_SELL && !conf_AllowSell)
+        return false;
+    if (action == FILTER_ACTION_DISENCHANT && !conf_AllowDisenchant)
+        return false;
+    if (action == FILTER_ACTION_DELETE && !conf_AllowDelete)
+        return false;
+    return true;
+}
+
 static LootFilterAction EvaluateFilter(Player* player, Item* item)
 {
     uint32 guid = player->GetGUID().GetCounter();
@@ -222,7 +236,6 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
 
     std::lock_guard<std::mutex> lock(s_filterMutex);
 
-    // Check if filtering is enabled for this player
     auto settingsIt = s_filterSettings.find(guid);
     if (settingsIt == s_filterSettings.end()
         || !settingsIt->second.filterEnabled)
@@ -232,25 +245,51 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
     if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
         return FILTER_ACTION_KEEP;
 
-    // Check rules in priority order (already sorted)
+    // Group rules: ruleGroup=0 are standalone (OR),
+    // ruleGroup>0 are AND-combined within the same group.
+    // Different groups are OR-combined.
+
+    // Collect grouped rules
+    std::unordered_map<uint32, std::vector<FilterRule const*>> groups;
+    std::vector<FilterRule const*> standalone;
+
     for (auto const& rule : rulesIt->second)
     {
         if (!rule.enabled)
             continue;
+        if (rule.ruleGroup == 0)
+            standalone.push_back(&rule);
+        else
+            groups[rule.ruleGroup].push_back(&rule);
+    }
 
-        if (MatchesCondition(rule, item, proto))
+    // Check standalone rules first (OR — first match wins)
+    for (auto const* rule : standalone)
+    {
+        if (MatchesCondition(*rule, item, proto)
+            && IsActionAllowed(rule->action))
+            return static_cast<LootFilterAction>(rule->action);
+    }
+
+    // Check AND groups (all conditions in group must match)
+    for (auto const& [groupId, groupRules] : groups)
+    {
+        bool allMatch = true;
+        for (auto const* rule : groupRules)
         {
-            // Validate action is allowed by config
-            if (rule.action == FILTER_ACTION_SELL && !conf_AllowSell)
-                continue;
-            if (rule.action == FILTER_ACTION_DISENCHANT
-                && !conf_AllowDisenchant)
-                continue;
-            if (rule.action == FILTER_ACTION_DELETE
-                && !conf_AllowDelete)
-                continue;
+            if (!MatchesCondition(*rule, item, proto))
+            {
+                allMatch = false;
+                break;
+            }
+        }
 
-            return static_cast<LootFilterAction>(rule.action);
+        if (allMatch && !groupRules.empty())
+        {
+            // Action comes from the first rule in the group
+            uint8 action = groupRules.front()->action;
+            if (IsActionAllowed(action))
+                return static_cast<LootFilterAction>(action);
         }
     }
 

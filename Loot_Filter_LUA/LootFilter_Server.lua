@@ -26,24 +26,6 @@ end
 
 local MAX_RULES = 30
 
-local CONDITION_NAMES = {
-	[0] = "Quality",
-	[1] = "Item Level Below",
-	[2] = "Sell Price Below",
-	[3] = "Item Class",
-	[4] = "Item Subclass",
-	[5] = "Is Cursed",
-	[6] = "Item ID",
-	[7] = "Name Contains",
-}
-
-local ACTION_NAMES = {
-	[0] = "Keep",
-	[1] = "Sell",
-	[2] = "Disenchant",
-	[3] = "Delete",
-}
-
 -- ============================================================
 -- Helper: send all rules + settings to a player's client UI
 -- ============================================================
@@ -67,8 +49,7 @@ local function SendFilterData(player)
 		totalDE = settingsQ:GetUInt32(2)
 		totalDel = settingsQ:GetUInt32(3)
 	else
-		-- Create default settings
-		CharDBExecute(string.format(
+		CharDBQuery(string.format(
 			"INSERT INTO `character_loot_filter_settings` "..
 			"(`characterId`, `filterEnabled`, `totalSold`, `totalDisenchanted`, `totalDeleted`) "..
 			"VALUES (%d, 1, 0, 0, 0)", guid))
@@ -79,12 +60,12 @@ local function SendFilterData(player)
 	msg:Add("LootFilter", "ReceiveSettings",
 		filterEnabled, totalSold, totalDE, totalDel, MAX_RULES)
 
-	-- Load rules
+	-- Load rules (including ruleGroup)
 	local rulesQ = CharDBQuery(string.format(
-		"SELECT `ruleId`, `conditionType`, `conditionValue`, `conditionStr`, "..
+		"SELECT `ruleId`, `ruleGroup`, `conditionType`, `conditionValue`, `conditionStr`, "..
 		"`action`, `priority`, `enabled` "..
 		"FROM `character_loot_filter` WHERE `characterId` = %d "..
-		"ORDER BY `priority` ASC", guid))
+		"ORDER BY `ruleGroup` ASC, `priority` ASC", guid))
 
 	-- Clear existing rules on client
 	msg:Add("LootFilter", "ClearRules")
@@ -92,15 +73,16 @@ local function SendFilterData(player)
 	if rulesQ then
 		repeat
 			local ruleId = rulesQ:GetUInt32(0)
-			local condType = rulesQ:GetUInt32(1)
-			local condValue = rulesQ:GetUInt32(2)
-			local condStr = rulesQ:GetString(3)
-			local action = rulesQ:GetUInt32(4)
-			local priority = rulesQ:GetUInt32(5)
-			local enabled = rulesQ:GetUInt32(6)
+			local ruleGroup = rulesQ:GetUInt32(1)
+			local condType = rulesQ:GetUInt32(2)
+			local condValue = rulesQ:GetUInt32(3)
+			local condStr = rulesQ:GetString(4)
+			local action = rulesQ:GetUInt32(5)
+			local priority = rulesQ:GetUInt32(6)
+			local enabled = rulesQ:GetUInt32(7)
 
 			msg:Add("LootFilter", "ReceiveRule",
-				ruleId, condType, condValue, condStr,
+				ruleId, ruleGroup, condType, condValue, condStr,
 				action, priority, enabled)
 		until not rulesQ:NextRow()
 	end
@@ -121,7 +103,7 @@ end
 -- Handler: Add a new rule
 -- ============================================================
 
-LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condStr, action, priority)
+LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condStr, action, priority, ruleGroup)
 	local guid = player:GetGUIDLow()
 
 	-- Validate inputs
@@ -130,10 +112,12 @@ LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condSt
 	condStr = tostring(condStr or "")
 	action = tonumber(action) or 1
 	priority = tonumber(priority) or 100
+	ruleGroup = tonumber(ruleGroup) or 0
 
 	if condType < 0 or condType > 7 then return end
 	if action < 0 or action > 3 then return end
 	if priority < 0 or priority > 255 then priority = 100 end
+	if ruleGroup < 0 then ruleGroup = 0 end
 
 	-- Sanitize string (escape single quotes)
 	condStr = string.gsub(condStr, "'", "\\'")
@@ -150,20 +134,34 @@ LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condSt
 		end
 	end
 
-	CharDBExecute(string.format(
+	-- Use CharDBQuery (synchronous) so the subsequent SELECT sees the new row
+	CharDBQuery(string.format(
 		"INSERT INTO `character_loot_filter` "..
-		"(`characterId`, `conditionType`, `conditionValue`, `conditionStr`, `action`, `priority`, `enabled`) "..
-		"VALUES (%d, %d, %d, '%s', %d, %d, 1)",
-		guid, condType, condValue, condStr, action, priority))
+		"(`characterId`, `ruleGroup`, `conditionType`, `conditionValue`, `conditionStr`, `action`, `priority`, `enabled`) "..
+		"VALUES (%d, %d, %d, %d, '%s', %d, %d, 1)",
+		guid, ruleGroup, condType, condValue, condStr, action, priority))
 
-	-- Reload C++ cache
 	player:SendBroadcastMessage("|cff00cc00[Loot Filter]|r Rule added.")
-
-	-- Trigger C++ reload via chat command
-	player:GetSession():SendAreaTriggerMessage("")
 
 	-- Refresh client
 	SendFilterData(player)
+end
+
+-- ============================================================
+-- Handler: Get next available group ID
+-- ============================================================
+
+LootFilter_ServerHandlers.GetNextGroup = function(player)
+	local guid = player:GetGUIDLow()
+	local maxQ = CharDBQuery(string.format(
+		"SELECT COALESCE(MAX(`ruleGroup`), 0) FROM `character_loot_filter` WHERE `characterId` = %d", guid))
+	local nextGroup = 1
+	if maxQ then
+		nextGroup = maxQ:GetUInt32(0) + 1
+	end
+	local msg = AIO.Msg()
+	msg:Add("LootFilter", "SetNextGroup", nextGroup)
+	msg:Send(player)
 end
 
 -- ============================================================
@@ -174,7 +172,6 @@ LootFilter_ServerHandlers.DeleteRule = function(player, ruleId)
 	local guid = player:GetGUIDLow()
 	ruleId = tonumber(ruleId) or 0
 
-	-- Verify rule belongs to player
 	local checkQ = CharDBQuery(string.format(
 		"SELECT `ruleId` FROM `character_loot_filter` "..
 		"WHERE `ruleId` = %d AND `characterId` = %d", ruleId, guid))
@@ -184,7 +181,7 @@ LootFilter_ServerHandlers.DeleteRule = function(player, ruleId)
 		return
 	end
 
-	CharDBExecute(string.format(
+	CharDBQuery(string.format(
 		"DELETE FROM `character_loot_filter` WHERE `ruleId` = %d AND `characterId` = %d",
 		ruleId, guid))
 
@@ -200,7 +197,7 @@ LootFilter_ServerHandlers.ToggleRule = function(player, ruleId)
 	local guid = player:GetGUIDLow()
 	ruleId = tonumber(ruleId) or 0
 
-	CharDBExecute(string.format(
+	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter` SET `enabled` = IF(`enabled`=1, 0, 1) "..
 		"WHERE `ruleId` = %d AND `characterId` = %d",
 		ruleId, guid))
@@ -215,7 +212,7 @@ end
 LootFilter_ServerHandlers.ToggleFilter = function(player)
 	local guid = player:GetGUIDLow()
 
-	CharDBExecute(string.format(
+	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter_settings` "..
 		"SET `filterEnabled` = IF(`filterEnabled`=1, 0, 1) "..
 		"WHERE `characterId` = %d", guid))
@@ -234,7 +231,7 @@ LootFilter_ServerHandlers.UpdatePriority = function(player, ruleId, newPriority)
 
 	if newPriority < 0 or newPriority > 255 then newPriority = 100 end
 
-	CharDBExecute(string.format(
+	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter` SET `priority` = %d "..
 		"WHERE `ruleId` = %d AND `characterId` = %d",
 		newPriority, ruleId, guid))
@@ -249,7 +246,7 @@ end
 LootFilter_ServerHandlers.DeleteAllRules = function(player)
 	local guid = player:GetGUIDLow()
 
-	CharDBExecute(string.format(
+	CharDBQuery(string.format(
 		"DELETE FROM `character_loot_filter` WHERE `characterId` = %d", guid))
 
 	player:SendBroadcastMessage("|cff00cc00[Loot Filter]|r All rules deleted.")
