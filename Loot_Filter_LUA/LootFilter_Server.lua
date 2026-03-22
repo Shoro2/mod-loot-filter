@@ -8,8 +8,9 @@
 
 local AIO = AIO or require("AIO")
 
--- Register client addon for AIO transmission
-AIO.AddAddon("LootFilter/LootFilter_Client.lua")
+-- Client addon registration is handled by AIO.AddAddon() in
+-- LootFilter_Client.lua (Eluna loads both files from the same
+-- directory; the client file self-registers via debug.getinfo).
 
 -- ============================================================
 -- Handler table (global for AIO reload safety)
