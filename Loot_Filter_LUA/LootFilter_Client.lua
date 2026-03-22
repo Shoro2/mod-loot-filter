@@ -4,6 +4,7 @@
 -- Full in-game UI for creating and managing loot filter rules.
 -- Players can filter by quality, item level, vendor value,
 -- cursed items, materials, item class, and more.
+-- Rules can be AND-combined via groups.
 -- =============================================================
 
 local AIO = AIO or require("AIO")
@@ -21,6 +22,7 @@ local settings = {
 	totalDeleted = 0,
 	maxRules = 30,
 }
+local nextGroupId = 1
 
 -- ============================================================
 -- Constants
@@ -72,16 +74,6 @@ local QUALITY_LABELS = {
 	[6] = "|cffe6cc80Heirloom|r",
 }
 
-local QUALITY_COLORS = {
-	[0] = {0.62, 0.62, 0.62},
-	[1] = {1, 1, 1},
-	[2] = {0.12, 1, 0},
-	[3] = {0, 0.44, 0.87},
-	[4] = {0.64, 0.21, 0.93},
-	[5] = {1, 0.5, 0},
-	[6] = {0.9, 0.8, 0.5},
-}
-
 local CLASS_LABELS = {
 	[0] = "Consumable",
 	[1] = "Container",
@@ -96,16 +88,33 @@ local CLASS_LABELS = {
 	[15] = "Miscellaneous",
 }
 
+-- Group colors for visual distinction
+local GROUP_COLORS = {
+	[1] = {0.3, 0.6, 1.0},
+	[2] = {1.0, 0.5, 0.2},
+	[3] = {0.2, 0.9, 0.4},
+	[4] = {0.9, 0.3, 0.8},
+	[5] = {1.0, 0.9, 0.2},
+	[6] = {0.4, 0.9, 0.9},
+	[7] = {0.9, 0.4, 0.4},
+	[8] = {0.6, 0.5, 1.0},
+}
+
+local function GetGroupColor(groupId)
+	if groupId == 0 then return nil end
+	return GROUP_COLORS[((groupId - 1) % #GROUP_COLORS) + 1]
+end
+
 -- ============================================================
 -- UI Frame creation
 -- ============================================================
 
-local FRAME_WIDTH = 580
-local FRAME_HEIGHT = 520
+local FRAME_WIDTH = 620
+local FRAME_HEIGHT = 540
 local ROW_HEIGHT = 22
 local MAX_VISIBLE_RULES = 12
 local HEADER_HEIGHT = 36
-local FOOTER_HEIGHT = 90
+local FOOTER_HEIGHT = 110
 
 -- Main frame
 local mainFrame = CreateFrame("Frame", "LootFilterFrame", UIParent)
@@ -206,52 +215,61 @@ for i = 1, MAX_VISIBLE_RULES do
 	else
 		rowBg:SetTexture(0.08, 0.08, 0.12, 0.5)
 	end
+	row.rowBg = rowBg
+
+	-- Group color bar (left edge)
+	local groupBar = row:CreateTexture(nil, "ARTWORK")
+	groupBar:SetPoint("TOPLEFT", 0, 0)
+	groupBar:SetPoint("BOTTOMLEFT", 0, 0)
+	groupBar:SetWidth(3)
+	groupBar:Hide()
+	row.groupBar = groupBar
 
 	-- Highlight on mouseover
 	local highlight = row:CreateTexture(nil, "HIGHLIGHT")
 	highlight:SetAllPoints()
 	highlight:SetTexture(0.3, 0.3, 0.4, 0.3)
 
-	-- Priority label
-	local priText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	priText:SetPoint("LEFT", 4, 0)
-	priText:SetWidth(24)
-	priText:SetJustifyH("CENTER")
-	row.priText = priText
+	-- Group label
+	local grpText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	grpText:SetPoint("LEFT", 6, 0)
+	grpText:SetWidth(30)
+	grpText:SetJustifyH("CENTER")
+	row.grpText = grpText
 
 	-- Condition label
 	local condText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	condText:SetPoint("LEFT", 32, 0)
-	condText:SetWidth(240)
+	condText:SetPoint("LEFT", 40, 0)
+	condText:SetWidth(230)
 	condText:SetJustifyH("LEFT")
 	row.condText = condText
 
 	-- Action label
 	local actText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	actText:SetPoint("LEFT", 280, 0)
-	actText:SetWidth(70)
+	actText:SetPoint("LEFT", 276, 0)
+	actText:SetWidth(55)
 	actText:SetJustifyH("CENTER")
 	row.actText = actText
 
 	-- Enabled indicator
 	local enText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	enText:SetPoint("LEFT", 355, 0)
-	enText:SetWidth(30)
+	enText:SetPoint("LEFT", 336, 0)
+	enText:SetWidth(26)
 	enText:SetJustifyH("CENTER")
 	row.enText = enText
 
 	-- Toggle button
 	local togBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	togBtn:SetSize(40, 18)
-	togBtn:SetPoint("LEFT", 388, 0)
+	togBtn:SetSize(36, 18)
+	togBtn:SetPoint("LEFT", 366, 0)
 	togBtn:SetText("Tog")
 	togBtn:SetNormalFontObject("GameFontNormalSmall")
 	row.togBtn = togBtn
 
 	-- Delete button
 	local delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	delBtn:SetSize(40, 18)
-	delBtn:SetPoint("LEFT", 432, 0)
+	delBtn:SetSize(36, 18)
+	delBtn:SetPoint("LEFT", 406, 0)
 	delBtn:SetText("Del")
 	delBtn:SetNormalFontObject("GameFontNormalSmall")
 	row.delBtn = delBtn
@@ -282,14 +300,14 @@ local function MakeColLabel(parent, text, x, w)
 	return fs
 end
 
-MakeColLabel(colHeader, "#", 4, 24)
-MakeColLabel(colHeader, "Condition", 32, 240)
-MakeColLabel(colHeader, "Action", 280, 70)
-MakeColLabel(colHeader, "On", 355, 30)
-MakeColLabel(colHeader, "", 388, 80)
+MakeColLabel(colHeader, "Grp", 6, 30)
+MakeColLabel(colHeader, "Condition", 40, 230)
+MakeColLabel(colHeader, "Action", 276, 55)
+MakeColLabel(colHeader, "On", 336, 26)
+MakeColLabel(colHeader, "", 366, 80)
 
 -- ============================================================
--- Scroll handler
+-- Scroll handler + update
 -- ============================================================
 
 local function UpdateRuleList()
@@ -303,20 +321,31 @@ local function UpdateRuleList()
 		if ruleIdx <= numRules then
 			local rule = rules[ruleIdx]
 
-			row.priText:SetText(tostring(rule.priority))
+			-- Group display
+			if rule.ruleGroup > 0 then
+				local gc = GetGroupColor(rule.ruleGroup)
+				row.grpText:SetText("|cff" .. string.format("%02x%02x%02x",
+					gc[1]*255, gc[2]*255, gc[3]*255) ..
+					"G" .. rule.ruleGroup .. "|r")
+				row.groupBar:SetTexture(gc[1], gc[2], gc[3], 0.8)
+				row.groupBar:Show()
+			else
+				row.grpText:SetText("|cff666666--|r")
+				row.groupBar:Hide()
+			end
 
 			-- Build condition display text
 			local condLabel = CONDITION_SHORT[rule.conditionType] or "?"
 			local valueStr
-			if rule.conditionType == 0 then -- quality
+			if rule.conditionType == 0 then
 				valueStr = QUALITY_LABELS[rule.conditionValue] or tostring(rule.conditionValue)
-			elseif rule.conditionType == 3 then -- class
+			elseif rule.conditionType == 3 then
 				valueStr = CLASS_LABELS[rule.conditionValue] or tostring(rule.conditionValue)
-			elseif rule.conditionType == 5 then -- cursed
+			elseif rule.conditionType == 5 then
 				valueStr = rule.conditionValue == 1 and "Yes" or "No"
-			elseif rule.conditionType == 7 then -- name contains
+			elseif rule.conditionType == 7 then
 				valueStr = '"' .. (rule.conditionStr or "") .. '"'
-			elseif rule.conditionType == 2 then -- sell price
+			elseif rule.conditionType == 2 then
 				local g = math.floor(rule.conditionValue / 10000)
 				local s = math.floor((rule.conditionValue % 10000) / 100)
 				local c = rule.conditionValue % 100
@@ -324,7 +353,16 @@ local function UpdateRuleList()
 			else
 				valueStr = tostring(rule.conditionValue)
 			end
-			row.condText:SetText(condLabel .. ": " .. valueStr)
+
+			-- AND indicator for grouped rules
+			local prefix = ""
+			if rule.ruleGroup > 0 then
+				-- Check if previous rule in list has same group
+				if ruleIdx > 1 and rules[ruleIdx - 1].ruleGroup == rule.ruleGroup then
+					prefix = "|cffaaaaaa+ AND |r"
+				end
+			end
+			row.condText:SetText(prefix .. condLabel .. ": " .. valueStr)
 
 			row.actText:SetText(ACTION_SHORT[rule.action] or "?")
 
@@ -339,7 +377,6 @@ local function UpdateRuleList()
 				AIO.Handle("LootFilter", "ToggleRule", rule.ruleId)
 			end)
 			row.delBtn:SetScript("OnClick", function()
-				-- Confirm delete
 				StaticPopupDialogs["LOOTFILTER_DELETE_" .. rule.ruleId] = {
 					text = "Delete this loot filter rule?",
 					button1 = "Yes",
@@ -372,7 +409,6 @@ local function UpdateRuleList()
 
 	ruleCountText:SetText(string.format("%d/%d rules", #rules, settings.maxRules))
 
-	-- Update toggle button
 	if settings.filterEnabled then
 		toggleBtn:SetText("|cff00ff00Filter: ON|r")
 	else
@@ -413,10 +449,9 @@ local condTypeLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNorm
 condTypeLabel:SetPoint("TOPLEFT", 6, -24)
 condTypeLabel:SetText("Condition:")
 
--- Condition type dropdown
 local condDropdown = CreateFrame("Frame", "LootFilterCondDropdown", footerFrame, "UIDropDownMenuTemplate")
 condDropdown:SetPoint("LEFT", condTypeLabel, "RIGHT", -8, -2)
-UIDropDownMenu_SetWidth(condDropdown, 140)
+UIDropDownMenu_SetWidth(condDropdown, 130)
 
 local selectedCondType = 0
 
@@ -438,7 +473,7 @@ UIDropDownMenu_Initialize(condDropdown, CondDropdown_Init)
 UIDropDownMenu_SetSelectedValue(condDropdown, 0)
 UIDropDownMenu_SetText(condDropdown, CONDITION_LABELS[0])
 
--- Value input (editbox)
+-- Value input
 local valueLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 valueLabel:SetPoint("LEFT", condDropdown, "RIGHT", 4, 2)
 valueLabel:SetText("Value:")
@@ -450,15 +485,14 @@ valueInput:SetAutoFocus(false)
 valueInput:SetMaxLetters(128)
 valueInput:SetText("0")
 
--- Row 2: Action dropdown + Priority + Add button
+-- Row 2: Action dropdown + Priority + Group
 local actionLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 actionLabel:SetPoint("TOPLEFT", 6, -52)
 actionLabel:SetText("Action:")
 
--- Action dropdown
 local actionDropdown = CreateFrame("Frame", "LootFilterActionDropdown", footerFrame, "UIDropDownMenuTemplate")
 actionDropdown:SetPoint("LEFT", actionLabel, "RIGHT", -8, -2)
-UIDropDownMenu_SetWidth(actionDropdown, 110)
+UIDropDownMenu_SetWidth(actionDropdown, 100)
 
 local selectedAction = 1
 
@@ -482,28 +516,58 @@ UIDropDownMenu_SetText(actionDropdown, ACTION_LABELS[1])
 
 -- Priority input
 local priLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-priLabel:SetPoint("LEFT", actionDropdown, "RIGHT", 4, 2)
-priLabel:SetText("Priority:")
+priLabel:SetPoint("LEFT", actionDropdown, "RIGHT", 2, 2)
+priLabel:SetText("Pri:")
 
 local priInput = CreateFrame("EditBox", "LootFilterPriorityInput", footerFrame, "InputBoxTemplate")
-priInput:SetSize(40, 20)
-priInput:SetPoint("LEFT", priLabel, "RIGHT", 6, 0)
+priInput:SetSize(32, 20)
+priInput:SetPoint("LEFT", priLabel, "RIGHT", 4, 0)
 priInput:SetAutoFocus(false)
 priInput:SetMaxLetters(3)
 priInput:SetText("100")
 priInput:SetNumeric(true)
 
--- Add Rule button
+-- Group input
+local grpLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+grpLabel:SetPoint("LEFT", priInput, "RIGHT", 8, 0)
+grpLabel:SetText("Group:")
+
+local grpInput = CreateFrame("EditBox", "LootFilterGroupInput", footerFrame, "InputBoxTemplate")
+grpInput:SetSize(28, 20)
+grpInput:SetPoint("LEFT", grpLabel, "RIGHT", 4, 0)
+grpInput:SetAutoFocus(false)
+grpInput:SetMaxLetters(3)
+grpInput:SetText("0")
+grpInput:SetNumeric(true)
+
+-- Group help tooltip
+grpInput:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:AddLine("|cff00cc66AND/OR Groups|r")
+	GameTooltip:AddLine("0 = Standalone rule (OR)", 0.8, 0.8, 0.8)
+	GameTooltip:AddLine("Same number = AND-combined", 0.8, 0.8, 0.8)
+	GameTooltip:AddLine("Different groups = OR", 0.8, 0.8, 0.8)
+	GameTooltip:AddLine(" ", 1, 1, 1)
+	GameTooltip:AddLine("Example: Group 1 with Quality=Green", 0.6, 0.6, 0.6)
+	GameTooltip:AddLine("AND Group 1 with iLvl<100 = Sell", 0.6, 0.6, 0.6)
+	GameTooltip:AddLine("-> Sells green items below iLvl 100", 0.3, 1, 0.3)
+	GameTooltip:Show()
+end)
+grpInput:SetScript("OnLeave", function()
+	GameTooltip:Hide()
+end)
+
+-- Row 3: Add button + New Group button
 local addBtn = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
 addBtn:SetSize(80, 22)
-addBtn:SetPoint("LEFT", priInput, "RIGHT", 12, 0)
+addBtn:SetPoint("TOPLEFT", 6, -78)
 addBtn:SetText("Add Rule")
 addBtn:SetScript("OnClick", function()
 	local condValue = 0
 	local condStr = ""
 	local inputText = valueInput:GetText() or ""
 
-	if selectedCondType == 7 then -- name contains
+	if selectedCondType == 7 then
 		condStr = inputText
 		condValue = 0
 	else
@@ -511,13 +575,39 @@ addBtn:SetScript("OnClick", function()
 	end
 
 	local priority = tonumber(priInput:GetText()) or 100
+	local ruleGroup = tonumber(grpInput:GetText()) or 0
 
 	AIO.Handle("LootFilter", "AddRule",
 		selectedCondType, condValue, condStr,
-		selectedAction, priority)
+		selectedAction, priority, ruleGroup)
 end)
 
--- Delete All button (bottom right)
+-- New Group button (auto-fills next group ID)
+local newGrpBtn = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
+newGrpBtn:SetSize(80, 22)
+newGrpBtn:SetPoint("LEFT", addBtn, "RIGHT", 6, 0)
+newGrpBtn:SetText("New Group")
+newGrpBtn:SetNormalFontObject("GameFontNormalSmall")
+newGrpBtn:SetScript("OnClick", function()
+	-- Calculate next group from existing rules
+	local maxGroup = 0
+	for _, r in ipairs(rules) do
+		if r.ruleGroup > maxGroup then
+			maxGroup = r.ruleGroup
+		end
+	end
+	grpInput:SetText(tostring(maxGroup + 1))
+end)
+newGrpBtn:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Set group ID to next available number.\nAdd multiple rules with same group = AND logic.", 1, 1, 1, 1, true)
+	GameTooltip:Show()
+end)
+newGrpBtn:SetScript("OnLeave", function()
+	GameTooltip:Hide()
+end)
+
+-- Delete All button
 local deleteAllBtn = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
 deleteAllBtn:SetSize(80, 22)
 deleteAllBtn:SetPoint("BOTTOMRIGHT", -4, 4)
@@ -558,7 +648,7 @@ local function MakePresetBtn(parent, text, x, condType, condValue, condStr, acti
 	btn:SetNormalFontObject("GameFontNormalSmall")
 	btn:SetScript("OnClick", function()
 		AIO.Handle("LootFilter", "AddRule",
-			condType, condValue, condStr or "", action, priority)
+			condType, condValue, condStr or "", action, priority, 0)
 	end)
 	btn:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -624,9 +714,10 @@ LootFilter_ClientHandlers.ClearRules = function(player)
 	rules = {}
 end
 
-LootFilter_ClientHandlers.ReceiveRule = function(player, ruleId, condType, condValue, condStr, action, priority, enabled)
+LootFilter_ClientHandlers.ReceiveRule = function(player, ruleId, ruleGroup, condType, condValue, condStr, action, priority, enabled)
 	table.insert(rules, {
 		ruleId = ruleId,
+		ruleGroup = ruleGroup or 0,
 		conditionType = condType,
 		conditionValue = condValue,
 		conditionStr = condStr or "",
@@ -636,9 +727,20 @@ LootFilter_ClientHandlers.ReceiveRule = function(player, ruleId, condType, condV
 	})
 end
 
+LootFilter_ClientHandlers.SetNextGroup = function(player, groupId)
+	nextGroupId = groupId or 1
+	grpInput:SetText(tostring(nextGroupId))
+end
+
 LootFilter_ClientHandlers.RefreshUI = function(player)
-	-- Sort by priority
+	-- Sort: grouped rules together, then by priority
 	table.sort(rules, function(a, b)
+		if a.ruleGroup ~= b.ruleGroup then
+			-- Group 0 (standalone) goes first
+			if a.ruleGroup == 0 then return true end
+			if b.ruleGroup == 0 then return false end
+			return a.ruleGroup < b.ruleGroup
+		end
 		return a.priority < b.priority
 	end)
 	UpdateRuleList()
@@ -687,5 +789,4 @@ minimapBtn:SetScript("OnLeave", function()
 	GameTooltip:Hide()
 end)
 
--- Debug
 DEFAULT_CHAT_FRAME:AddMessage("|cff00cc66[Loot Filter]|r UI loaded. Type /lf to open.")
