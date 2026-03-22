@@ -109,7 +109,7 @@ end
 -- UI Frame creation
 -- ============================================================
 
-local FRAME_WIDTH = 620
+local FRAME_WIDTH = 660
 local FRAME_HEIGHT = 540
 local ROW_HEIGHT = 22
 local MAX_VISIBLE_RULES = 12
@@ -240,16 +240,23 @@ for i = 1, MAX_VISIBLE_RULES do
 	-- Condition label
 	local condText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	condText:SetPoint("LEFT", 40, 0)
-	condText:SetWidth(230)
+	condText:SetWidth(200)
 	condText:SetJustifyH("LEFT")
 	row.condText = condText
 
 	-- Action label
 	local actText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	actText:SetPoint("LEFT", 276, 0)
+	actText:SetPoint("LEFT", 244, 0)
 	actText:SetWidth(55)
 	actText:SetJustifyH("CENTER")
 	row.actText = actText
+
+	-- Priority label
+	local priText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	priText:SetPoint("LEFT", 302, 0)
+	priText:SetWidth(30)
+	priText:SetJustifyH("CENTER")
+	row.priText = priText
 
 	-- Enabled indicator
 	local enText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -266,10 +273,18 @@ for i = 1, MAX_VISIBLE_RULES do
 	togBtn:SetNormalFontObject("GameFontNormalSmall")
 	row.togBtn = togBtn
 
+	-- Edit button
+	local editBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+	editBtn:SetSize(36, 18)
+	editBtn:SetPoint("LEFT", 406, 0)
+	editBtn:SetText("Edit")
+	editBtn:SetNormalFontObject("GameFontNormalSmall")
+	row.editBtn = editBtn
+
 	-- Delete button
 	local delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
 	delBtn:SetSize(36, 18)
-	delBtn:SetPoint("LEFT", 406, 0)
+	delBtn:SetPoint("LEFT", 446, 0)
 	delBtn:SetText("Del")
 	delBtn:SetNormalFontObject("GameFontNormalSmall")
 	row.delBtn = delBtn
@@ -301,10 +316,133 @@ local function MakeColLabel(parent, text, x, w)
 end
 
 MakeColLabel(colHeader, "Grp", 6, 30)
-MakeColLabel(colHeader, "Condition", 40, 230)
-MakeColLabel(colHeader, "Action", 276, 55)
+MakeColLabel(colHeader, "Condition", 40, 200)
+MakeColLabel(colHeader, "Action", 244, 55)
+MakeColLabel(colHeader, "Pri", 302, 30)
 MakeColLabel(colHeader, "On", 336, 26)
-MakeColLabel(colHeader, "", 366, 80)
+MakeColLabel(colHeader, "", 366, 120)
+
+-- ============================================================
+-- Edit Rule popup
+-- ============================================================
+
+local editFrame = CreateFrame("Frame", "LootFilterEditFrame", mainFrame)
+editFrame:SetSize(220, 160)
+editFrame:SetPoint("CENTER", 0, 0)
+editFrame:SetFrameStrata("DIALOG")
+editFrame:SetFrameLevel(100)
+editFrame:EnableMouse(true)
+editFrame:Hide()
+
+local editBg = editFrame:CreateTexture(nil, "BACKGROUND")
+editBg:SetAllPoints()
+editBg:SetTexture(0.08, 0.08, 0.12, 0.95)
+
+local editBorder = CreateFrame("Frame", nil, editFrame)
+editBorder:SetPoint("TOPLEFT", -2, 2)
+editBorder:SetPoint("BOTTOMRIGHT", 2, -2)
+editBorder:SetBackdrop({
+	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+	edgeSize = 14,
+})
+editBorder:SetBackdropBorderColor(0.4, 0.4, 0.6, 0.9)
+
+local editTitle = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+editTitle:SetPoint("TOP", 0, -8)
+editTitle:SetText("|cff00cc66Edit Rule|r")
+
+local editRuleId = 0
+
+-- Action dropdown
+local editActLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+editActLabel:SetPoint("TOPLEFT", 10, -30)
+editActLabel:SetText("Action:")
+
+local editActDropdown = CreateFrame("Frame", "LootFilterEditActDropdown", editFrame, "UIDropDownMenuTemplate")
+editActDropdown:SetPoint("LEFT", editActLabel, "RIGHT", -8, -2)
+UIDropDownMenu_SetWidth(editActDropdown, 120)
+
+local editSelectedAction = 0
+
+local function EditActDropdown_Init()
+	for i = 0, 3 do
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = ACTION_LABELS[i]
+		info.value = i
+		info.func = function(self)
+			editSelectedAction = self.value
+			UIDropDownMenu_SetSelectedValue(editActDropdown, self.value)
+			UIDropDownMenu_SetText(editActDropdown, ACTION_LABELS[self.value])
+		end
+		UIDropDownMenu_AddButton(info)
+	end
+end
+
+UIDropDownMenu_Initialize(editActDropdown, EditActDropdown_Init)
+
+-- Priority input
+local editPriLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+editPriLabel:SetPoint("TOPLEFT", 10, -62)
+editPriLabel:SetText("Priority:")
+
+local editPriInput = CreateFrame("EditBox", "LootFilterEditPriInput", editFrame, "InputBoxTemplate")
+editPriInput:SetSize(50, 20)
+editPriInput:SetPoint("LEFT", editPriLabel, "RIGHT", 8, 0)
+editPriInput:SetAutoFocus(false)
+editPriInput:SetMaxLetters(3)
+editPriInput:SetNumeric(true)
+
+local editPriHint = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+editPriHint:SetPoint("LEFT", editPriInput, "RIGHT", 6, 0)
+editPriHint:SetText("|cff8888880-255|r")
+
+-- Group input
+local editGrpLabel = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+editGrpLabel:SetPoint("TOPLEFT", 10, -88)
+editGrpLabel:SetText("Group:")
+
+local editGrpInput = CreateFrame("EditBox", "LootFilterEditGrpInput", editFrame, "InputBoxTemplate")
+editGrpInput:SetSize(50, 20)
+editGrpInput:SetPoint("LEFT", editGrpLabel, "RIGHT", 8, 0)
+editGrpInput:SetAutoFocus(false)
+editGrpInput:SetMaxLetters(3)
+editGrpInput:SetNumeric(true)
+
+local editGrpHint = editFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+editGrpHint:SetPoint("LEFT", editGrpInput, "RIGHT", 6, 0)
+editGrpHint:SetText("|cff8888880=standalone|r")
+
+-- Save button
+local editSaveBtn = CreateFrame("Button", nil, editFrame, "UIPanelButtonTemplate")
+editSaveBtn:SetSize(80, 22)
+editSaveBtn:SetPoint("BOTTOMLEFT", 20, 10)
+editSaveBtn:SetText("Save")
+editSaveBtn:SetScript("OnClick", function()
+	local newAction = editSelectedAction
+	local newPri = tonumber(editPriInput:GetText()) or 100
+	local newGrp = tonumber(editGrpInput:GetText()) or 0
+	AIO.Handle("LootFilter", "UpdateRule", editRuleId, newAction, newPri, newGrp)
+	editFrame:Hide()
+end)
+
+-- Cancel button
+local editCancelBtn = CreateFrame("Button", nil, editFrame, "UIPanelButtonTemplate")
+editCancelBtn:SetSize(80, 22)
+editCancelBtn:SetPoint("BOTTOMRIGHT", -20, 10)
+editCancelBtn:SetText("Cancel")
+editCancelBtn:SetScript("OnClick", function()
+	editFrame:Hide()
+end)
+
+local function OpenEditPopup(rule)
+	editRuleId = rule.ruleId
+	editSelectedAction = rule.action
+	UIDropDownMenu_SetSelectedValue(editActDropdown, rule.action)
+	UIDropDownMenu_SetText(editActDropdown, ACTION_LABELS[rule.action])
+	editPriInput:SetText(tostring(rule.priority))
+	editGrpInput:SetText(tostring(rule.ruleGroup))
+	editFrame:Show()
+end
 
 -- ============================================================
 -- Scroll handler + update
@@ -370,6 +508,11 @@ local function UpdateRuleList()
 
 			row.actText:SetText(ACTION_SHORT[rule.action] or "?")
 
+			-- Priority display
+			local priColor = rule.priority < 50 and "ffff8800" or
+			                 rule.priority > 150 and "ff666666" or "ffaaaaaa"
+			row.priText:SetText("|c" .. priColor .. tostring(rule.priority) .. "|r")
+
 			if rule.enabled == 1 then
 				row.enText:SetText("|cff00ff00On|r")
 			else
@@ -379,6 +522,9 @@ local function UpdateRuleList()
 			row.ruleId = rule.ruleId
 			row.togBtn:SetScript("OnClick", function()
 				AIO.Handle("LootFilter", "ToggleRule", rule.ruleId)
+			end)
+			row.editBtn:SetScript("OnClick", function()
+				OpenEditPopup(rule)
 			end)
 			row.delBtn:SetScript("OnClick", function()
 				StaticPopupDialogs["LOOTFILTER_DELETE_" .. rule.ruleId] = {

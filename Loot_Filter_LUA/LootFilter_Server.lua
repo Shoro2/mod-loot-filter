@@ -240,6 +240,29 @@ LootFilter_ServerHandlers.UpdatePriority = function(player, ruleId, newPriority)
 end
 
 -- ============================================================
+-- Handler: Update rule (action, priority, group)
+-- ============================================================
+
+LootFilter_ServerHandlers.UpdateRule = function(player, ruleId, newAction, newPriority, newGroup)
+	local guid = player:GetGUIDLow()
+	ruleId = tonumber(ruleId) or 0
+	newAction = tonumber(newAction) or 1
+	newPriority = tonumber(newPriority) or 100
+	newGroup = tonumber(newGroup) or 0
+
+	if newAction < 0 or newAction > 3 then newAction = 1 end
+	if newPriority < 0 or newPriority > 255 then newPriority = 100 end
+	if newGroup < 0 or newGroup > 255 then newGroup = 0 end
+
+	CharDBQuery(string.format(
+		"UPDATE `character_loot_filter` SET `action` = %d, `priority` = %d, `ruleGroup` = %d "..
+		"WHERE `ruleId` = %d AND `characterId` = %d",
+		newAction, newPriority, newGroup, ruleId, guid))
+
+	SendFilterData(player)
+end
+
+-- ============================================================
 -- Handler: Delete all rules
 -- ============================================================
 
