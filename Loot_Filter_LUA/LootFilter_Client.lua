@@ -182,7 +182,7 @@ listFrame:SetHeight(MAX_VISIBLE_RULES * ROW_HEIGHT + 4)
 
 local listBg = listFrame:CreateTexture(nil, "BACKGROUND")
 listBg:SetAllPoints()
-listBg:SetColorTexture(0.05, 0.05, 0.08, 0.8)
+listBg:SetTexture(0.05, 0.05, 0.08, 0.8)
 
 -- Scroll frame
 local scrollFrame = CreateFrame("ScrollFrame", "LootFilterScrollFrame", listFrame, "FauxScrollFrameTemplate")
@@ -202,15 +202,15 @@ for i = 1, MAX_VISIBLE_RULES do
 	local rowBg = row:CreateTexture(nil, "BACKGROUND")
 	rowBg:SetAllPoints()
 	if i % 2 == 0 then
-		rowBg:SetColorTexture(0.12, 0.12, 0.16, 0.5)
+		rowBg:SetTexture(0.12, 0.12, 0.16, 0.5)
 	else
-		rowBg:SetColorTexture(0.08, 0.08, 0.12, 0.5)
+		rowBg:SetTexture(0.08, 0.08, 0.12, 0.5)
 	end
 
 	-- Highlight on mouseover
 	local highlight = row:CreateTexture(nil, "HIGHLIGHT")
 	highlight:SetAllPoints()
-	highlight:SetColorTexture(0.3, 0.3, 0.4, 0.3)
+	highlight:SetTexture(0.3, 0.3, 0.4, 0.3)
 
 	-- Priority label
 	local priText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -271,7 +271,7 @@ colHeader:SetHeight(18)
 
 local colBg = colHeader:CreateTexture(nil, "BACKGROUND")
 colBg:SetAllPoints()
-colBg:SetColorTexture(0.15, 0.15, 0.2, 0.9)
+colBg:SetTexture(0.15, 0.15, 0.2, 0.9)
 
 local function MakeColLabel(parent, text, x, w)
 	local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -395,14 +395,14 @@ footerFrame:SetHeight(FOOTER_HEIGHT)
 
 local footerBg = footerFrame:CreateTexture(nil, "BACKGROUND")
 footerBg:SetAllPoints()
-footerBg:SetColorTexture(0.1, 0.1, 0.14, 0.8)
+footerBg:SetTexture(0.1, 0.1, 0.14, 0.8)
 
 -- Separator line
 local sepLine = footerFrame:CreateTexture(nil, "ARTWORK")
 sepLine:SetPoint("TOPLEFT", 4, -1)
 sepLine:SetPoint("TOPRIGHT", -4, -1)
 sepLine:SetHeight(1)
-sepLine:SetColorTexture(0.3, 0.3, 0.4, 0.8)
+sepLine:SetTexture(0.3, 0.3, 0.4, 0.8)
 
 local addLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 addLabel:SetPoint("TOPLEFT", 6, -6)
