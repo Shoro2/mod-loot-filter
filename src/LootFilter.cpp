@@ -7,6 +7,7 @@
 
 #include "LootFilter.h"
 #include "Chat.h"
+#include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
@@ -15,6 +16,8 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+
+using namespace Acore::ChatCommands;
 
 #include <mutex>
 #include <unordered_map>
@@ -502,7 +505,7 @@ public:
     }
 
     static bool HandleReloadCmd(ChatHandler* handler,
-        char const* /*args*/)
+        Tail /*args*/)
     {
         Player* player = handler->GetPlayer();
         if (!player)
@@ -511,14 +514,16 @@ public:
         uint32 guid = player->GetGUID().GetCounter();
         LoadRulesForPlayer(guid);
         LoadSettingsForPlayer(guid);
+
+        std::lock_guard<std::mutex> lock(s_filterMutex);
         handler->PSendSysMessage(
-            "|cff00cc00[Loot Filter]|r Rules reloaded (%zu rules).",
-            s_filterRules[guid].size());
+            "|cff00cc00[Loot Filter]|r Rules reloaded (%u rules).",
+            static_cast<uint32>(s_filterRules[guid].size()));
         return true;
     }
 
     static bool HandleToggleCmd(ChatHandler* handler,
-        char const* /*args*/)
+        Tail /*args*/)
     {
         Player* player = handler->GetPlayer();
         if (!player)
@@ -549,7 +554,7 @@ public:
     }
 
     static bool HandleStatsCmd(ChatHandler* handler,
-        char const* /*args*/)
+        Tail /*args*/)
     {
         Player* player = handler->GetPlayer();
         if (!player)
@@ -567,7 +572,6 @@ public:
         }
 
         auto const& s = it->second;
-        // Convert copper to gold/silver/copper
         uint32 gold   = s.totalSold / 10000;
         uint32 silver = (s.totalSold % 10000) / 100;
         uint32 copper = s.totalSold % 100;
@@ -575,10 +579,10 @@ public:
         handler->PSendSysMessage(
             "|cff00cc00[Loot Filter]|r Stats:");
         handler->PSendSysMessage(
-            "  Filter: %s | Rules: %zu",
+            "  Filter: %s | Rules: %u",
             s.filterEnabled ? "|cff00ff00ON|r" : "|cffff0000OFF|r",
-            s_filterRules.count(guid)
-                ? s_filterRules[guid].size() : 0);
+            static_cast<uint32>(s_filterRules.count(guid)
+                ? s_filterRules[guid].size() : 0));
         handler->PSendSysMessage(
             "  Gold earned: %ug %us %uc", gold, silver, copper);
         handler->PSendSysMessage(
