@@ -176,9 +176,19 @@ statsText:SetJustifyH("LEFT")
 statsText:SetText("")
 
 local ruleCountText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-ruleCountText:SetPoint("RIGHT", 0, 0)
+ruleCountText:SetPoint("RIGHT", -90, 0)
 ruleCountText:SetJustifyH("RIGHT")
 ruleCountText:SetText("0/30 rules")
+
+-- Log toggle button in header
+local lfLogShown = false
+local lfSessionLog = {}
+
+local logToggleBtn = CreateFrame("Button", nil, headerFrame, "UIPanelButtonTemplate")
+logToggleBtn:SetSize(80, 22)
+logToggleBtn:SetPoint("RIGHT", 0, 0)
+logToggleBtn:SetText("Show Log")
+logToggleBtn:SetNormalFontObject("GameFontNormalSmall")
 
 -- ============================================================
 -- Rule list (scrollable)
@@ -966,6 +976,105 @@ MakePresetBtn(presetFrame, "Del <iLvl50", 340, 1, 50, "", 3, 15,
 	"Delete items with item level below 50")
 MakePresetBtn(presetFrame, "Keep Cursed", 436, 5, 1, "", 0, 1,
 	"Always keep Cursed items (whitelist)")
+
+-- ============================================================
+-- Session Log Panel (overlays rule list when active)
+-- ============================================================
+
+local lfLogFrame = CreateFrame("Frame", nil, mainFrame)
+lfLogFrame:SetPoint("TOPLEFT", 14, -(30 + HEADER_HEIGHT + 4))
+lfLogFrame:SetPoint("BOTTOMRIGHT", -14, FOOTER_HEIGHT + 14)
+lfLogFrame:SetBackdrop({
+	bgFile = "Interface/Buttons/WHITE8x8",
+	edgeFile = "Interface/Buttons/WHITE8x8",
+	edgeSize = 1,
+	insets = {left = 1, right = 1, top = 1, bottom = 1}
+})
+lfLogFrame:SetBackdropColor(0.05, 0.05, 0.08, 0.8)
+lfLogFrame:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.8)
+lfLogFrame:Hide()
+
+local lfLogScrollFrame = CreateFrame("ScrollFrame", "LootFilterLogScroll", lfLogFrame, "UIPanelScrollFrameTemplate")
+lfLogScrollFrame:SetPoint("TOPLEFT", 6, -6)
+lfLogScrollFrame:SetPoint("BOTTOMRIGHT", -28, 6)
+
+local lfLogContent = CreateFrame("Frame", nil, lfLogScrollFrame)
+lfLogContent:SetWidth(1)
+lfLogContent:SetHeight(1)
+lfLogScrollFrame:SetScrollChild(lfLogContent)
+
+local lfLogText = lfLogContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+lfLogText:SetPoint("TOPLEFT", 0, 0)
+lfLogText:SetWidth(580)
+lfLogText:SetJustifyH("LEFT")
+lfLogText:SetJustifyV("TOP")
+lfLogText:SetTextColor(0.8, 0.8, 0.8)
+lfLogText:SetText("")
+
+local lfLogEmptyText = lfLogFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+lfLogEmptyText:SetPoint("CENTER", 0, 0)
+lfLogEmptyText:SetText("No filter activity this session")
+
+local function RefreshLFLog()
+	if #lfSessionLog == 0 then
+		lfLogEmptyText:Show()
+		lfLogText:SetText("")
+		lfLogContent:SetHeight(1)
+		return
+	end
+	lfLogEmptyText:Hide()
+	local lines = {}
+	for i = #lfSessionLog, 1, -1 do
+		table.insert(lines, lfSessionLog[i])
+	end
+	local str = table.concat(lines, "\n")
+	lfLogText:SetText(str)
+	lfLogContent:SetHeight(lfLogText:GetStringHeight() + 10)
+end
+
+local function ShowLFLog()
+	lfLogShown = true
+	listFrame:Hide()
+	colHeader:Hide()
+	footerFrame:Hide()
+	presetFrame:Hide()
+	lfLogFrame:Show()
+	logToggleBtn:SetText("Show Rules")
+	RefreshLFLog()
+end
+
+local function HideLFLog()
+	lfLogShown = false
+	lfLogFrame:Hide()
+	listFrame:Show()
+	colHeader:Show()
+	footerFrame:Show()
+	presetFrame:Show()
+	logToggleBtn:SetText("Show Log")
+end
+
+logToggleBtn:SetScript("OnClick", function()
+	if lfLogShown then
+		HideLFLog()
+	else
+		ShowLFLog()
+	end
+end)
+
+-- Capture [Loot Filter] system messages into session log
+local lfLogCaptureFrame = CreateFrame("Frame")
+lfLogCaptureFrame:RegisterEvent("CHAT_MSG_SYSTEM")
+lfLogCaptureFrame:SetScript("OnEvent", function(self, event, msg)
+	if msg and string.find(msg, "%[Loot Filter%]") then
+		local t = date("%H:%M:%S")
+		-- Strip the "[Loot Filter]" prefix for cleaner display
+		local cleanMsg = msg:gsub("|cff888888%[Loot Filter%]|r ", "")
+		table.insert(lfSessionLog, "|cff888888" .. t .. "|r " .. cleanMsg)
+		if lfLogShown then
+			RefreshLFLog()
+		end
+	end
+end)
 
 -- ============================================================
 -- Toggle UI with slash command
