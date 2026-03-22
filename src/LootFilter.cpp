@@ -325,8 +325,8 @@ static void SellItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Sold %s for %u copper.",
-            itemName.c_str(), sellPrice);
+            "|cff888888[Loot Filter]|r Sold {} for {} copper.",
+            itemName, sellPrice);
     }
 }
 
@@ -398,8 +398,8 @@ static void DisenchantItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Disenchanted %s.",
-            itemName.c_str());
+            "|cff888888[Loot Filter]|r Disenchanted {}.",
+            itemName);
     }
 }
 
@@ -420,8 +420,8 @@ static void DeleteItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Deleted %s.",
-            itemName.c_str());
+            "|cff888888[Loot Filter]|r Deleted {}.",
+            itemName);
     }
 }
 
@@ -532,6 +532,13 @@ public:
         if (!conf_Enable || !item)
             return;
 
+        // Always reload rules from DB before evaluating, since
+        // rules may have been changed via AIO/Lua without C++
+        // cache being notified.
+        uint32 guid = player->GetGUID().GetCounter();
+        LoadRulesForPlayer(guid);
+        LoadSettingsForPlayer(guid);
+
         LootFilterAction action = EvaluateFilter(player, item);
 
         if (action != FILTER_ACTION_KEEP)
@@ -594,7 +601,7 @@ public:
 
         std::lock_guard<std::mutex> lock(s_filterMutex);
         handler->PSendSysMessage(
-            "|cff00cc00[Loot Filter]|r Rules reloaded (%u rules).",
+            "|cff00cc00[Loot Filter]|r Rules reloaded ({} rules).",
             static_cast<uint32>(s_filterRules[guid].size()));
         return true;
     }
@@ -621,7 +628,7 @@ public:
                     "WHERE `characterId` = {}",
                     it->second.filterEnabled ? 1 : 0, guid);
                 handler->PSendSysMessage(
-                    "|cff00cc00[Loot Filter]|r Filter %s.",
+                    "|cff00cc00[Loot Filter]|r Filter {}.",
                     it->second.filterEnabled
                         ? "enabled" : "disabled");
             }
@@ -656,14 +663,14 @@ public:
         handler->PSendSysMessage(
             "|cff00cc00[Loot Filter]|r Stats:");
         handler->PSendSysMessage(
-            "  Filter: %s | Rules: %u",
+            "  Filter: {} | Rules: {}",
             s.filterEnabled ? "|cff00ff00ON|r" : "|cffff0000OFF|r",
             static_cast<uint32>(s_filterRules.count(guid)
                 ? s_filterRules[guid].size() : 0));
         handler->PSendSysMessage(
-            "  Gold earned: %ug %us %uc", gold, silver, copper);
+            "  Gold earned: {}g {}s {}c", gold, silver, copper);
         handler->PSendSysMessage(
-            "  Disenchanted: %u | Deleted: %u",
+            "  Disenchanted: {} | Deleted: {}",
             s.totalDisenchanted, s.totalDeleted);
 
         return true;
