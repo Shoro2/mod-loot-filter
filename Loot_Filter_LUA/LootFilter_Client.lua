@@ -341,8 +341,12 @@ local function UpdateRuleList()
 				valueStr = QUALITY_LABELS[rule.conditionValue] or tostring(rule.conditionValue)
 			elseif rule.conditionType == 3 then
 				valueStr = CLASS_LABELS[rule.conditionValue] or tostring(rule.conditionValue)
+			elseif rule.conditionType == 4 then
+				valueStr = WEAPON_SUBCLASS[rule.conditionValue]
+					or ARMOR_SUBCLASS[rule.conditionValue]
+					or tostring(rule.conditionValue)
 			elseif rule.conditionType == 5 then
-				valueStr = rule.conditionValue == 1 and "Yes" or "No"
+				valueStr = rule.conditionValue == 1 and "|cff9b59b6Cursed|r" or "Not Cursed"
 			elseif rule.conditionType == 7 then
 				valueStr = '"' .. (rule.conditionStr or "") .. '"'
 			elseif rule.conditionType == 2 then
@@ -464,6 +468,7 @@ local function CondDropdown_Init()
 			selectedCondType = self.value
 			UIDropDownMenu_SetSelectedValue(condDropdown, self.value)
 			UIDropDownMenu_SetText(condDropdown, CONDITION_LABELS[self.value])
+			UpdateValueInput()
 		end
 		UIDropDownMenu_AddButton(info)
 	end
@@ -473,17 +478,154 @@ UIDropDownMenu_Initialize(condDropdown, CondDropdown_Init)
 UIDropDownMenu_SetSelectedValue(condDropdown, 0)
 UIDropDownMenu_SetText(condDropdown, CONDITION_LABELS[0])
 
--- Value input
+-- Value area: dynamic input based on condition type
 local valueLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 valueLabel:SetPoint("LEFT", condDropdown, "RIGHT", 4, 2)
 valueLabel:SetText("Value:")
 
+-- EditBox for numeric/text input (iLvl, price, itemId, name)
 local valueInput = CreateFrame("EditBox", "LootFilterValueInput", footerFrame, "InputBoxTemplate")
 valueInput:SetSize(80, 20)
 valueInput:SetPoint("LEFT", valueLabel, "RIGHT", 6, 0)
 valueInput:SetAutoFocus(false)
 valueInput:SetMaxLetters(128)
 valueInput:SetText("0")
+
+-- Dropdown for Quality selection
+local selectedValueFromDropdown = 0
+
+local valueDropdown = CreateFrame("Frame", "LootFilterValueDropdown", footerFrame, "UIDropDownMenuTemplate")
+valueDropdown:SetPoint("LEFT", valueLabel, "RIGHT", -12, -2)
+UIDropDownMenu_SetWidth(valueDropdown, 130)
+valueDropdown:Hide()
+
+-- Subclass labels for Weapon (class 2)
+local WEAPON_SUBCLASS = {
+	[0] = "Axe (1H)", [1] = "Axe (2H)", [2] = "Bow", [3] = "Gun",
+	[4] = "Mace (1H)", [5] = "Mace (2H)", [6] = "Polearm", [7] = "Sword (1H)",
+	[8] = "Sword (2H)", [10] = "Staff", [13] = "Fist Weapon",
+	[14] = "Miscellaneous", [15] = "Dagger", [16] = "Thrown",
+	[18] = "Crossbow", [19] = "Wand", [20] = "Fishing Pole",
+}
+
+-- Subclass labels for Armor (class 4)
+local ARMOR_SUBCLASS = {
+	[0] = "Miscellaneous", [1] = "Cloth", [2] = "Leather",
+	[3] = "Mail", [4] = "Plate", [6] = "Shield",
+}
+
+-- Build dropdown items based on condition type
+local function ValueDropdown_Init()
+	if selectedCondType == 0 then -- Quality
+		for i = 0, 6 do
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = QUALITY_LABELS[i] or tostring(i)
+			info.value = i
+			info.func = function(self)
+				selectedValueFromDropdown = self.value
+				UIDropDownMenu_SetSelectedValue(valueDropdown, self.value)
+				UIDropDownMenu_SetText(valueDropdown, QUALITY_LABELS[self.value] or tostring(self.value))
+			end
+			UIDropDownMenu_AddButton(info)
+		end
+	elseif selectedCondType == 3 then -- Item Class
+		local classOrder = {0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 15}
+		for _, classId in ipairs(classOrder) do
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = CLASS_LABELS[classId] or tostring(classId)
+			info.value = classId
+			info.func = function(self)
+				selectedValueFromDropdown = self.value
+				UIDropDownMenu_SetSelectedValue(valueDropdown, self.value)
+				UIDropDownMenu_SetText(valueDropdown, CLASS_LABELS[self.value] or tostring(self.value))
+			end
+			UIDropDownMenu_AddButton(info)
+		end
+	elseif selectedCondType == 4 then -- Item Subclass
+		-- Show both weapon and armor subclasses
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = "|cffcccccc-- Weapon --"
+		info.isTitle = true
+		info.notCheckable = true
+		UIDropDownMenu_AddButton(info)
+		local weapOrder = {0,1,2,3,4,5,6,7,8,10,13,14,15,16,18,19,20}
+		for _, subId in ipairs(weapOrder) do
+			local si = UIDropDownMenu_CreateInfo()
+			si.text = WEAPON_SUBCLASS[subId]
+			si.value = subId
+			si.func = function(self)
+				selectedValueFromDropdown = self.value
+				UIDropDownMenu_SetSelectedValue(valueDropdown, self.value)
+				UIDropDownMenu_SetText(valueDropdown, WEAPON_SUBCLASS[self.value] or tostring(self.value))
+			end
+			UIDropDownMenu_AddButton(si)
+		end
+		info = UIDropDownMenu_CreateInfo()
+		info.text = "|cffcccccc-- Armor --"
+		info.isTitle = true
+		info.notCheckable = true
+		UIDropDownMenu_AddButton(info)
+		local armOrder = {0,1,2,3,4,6}
+		for _, subId in ipairs(armOrder) do
+			local si = UIDropDownMenu_CreateInfo()
+			si.text = ARMOR_SUBCLASS[subId]
+			si.value = subId
+			si.func = function(self)
+				selectedValueFromDropdown = self.value
+				UIDropDownMenu_SetSelectedValue(valueDropdown, self.value)
+				UIDropDownMenu_SetText(valueDropdown, ARMOR_SUBCLASS[self.value] or tostring(self.value))
+			end
+			UIDropDownMenu_AddButton(si)
+		end
+	elseif selectedCondType == 5 then -- Is Cursed
+		for _, v in ipairs({{1, "Yes (Cursed)"}, {0, "No (Not Cursed)"}}) do
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = v[2]
+			info.value = v[1]
+			info.func = function(self)
+				selectedValueFromDropdown = self.value
+				UIDropDownMenu_SetSelectedValue(valueDropdown, self.value)
+				UIDropDownMenu_SetText(valueDropdown, v[2])
+			end
+			UIDropDownMenu_AddButton(info)
+		end
+	end
+end
+
+UIDropDownMenu_Initialize(valueDropdown, ValueDropdown_Init)
+
+-- Show/hide the right input based on condition type
+local function UpdateValueInput()
+	-- Types that use dropdown: Quality(0), ItemClass(3), Subclass(4), Cursed(5)
+	if selectedCondType == 0 or selectedCondType == 3
+	   or selectedCondType == 4 or selectedCondType == 5 then
+		valueInput:Hide()
+		valueDropdown:Show()
+		-- Re-initialize dropdown for the new type
+		UIDropDownMenu_Initialize(valueDropdown, ValueDropdown_Init)
+		selectedValueFromDropdown = 0
+		if selectedCondType == 0 then
+			UIDropDownMenu_SetText(valueDropdown, QUALITY_LABELS[0])
+		elseif selectedCondType == 3 then
+			UIDropDownMenu_SetText(valueDropdown, CLASS_LABELS[0])
+		elseif selectedCondType == 4 then
+			UIDropDownMenu_SetText(valueDropdown, WEAPON_SUBCLASS[0])
+		elseif selectedCondType == 5 then
+			selectedValueFromDropdown = 1
+			UIDropDownMenu_SetText(valueDropdown, "Yes (Cursed)")
+		end
+	else
+		valueDropdown:Hide()
+		valueInput:Show()
+		if selectedCondType == 7 then
+			valueInput:SetNumeric(false)
+			valueInput:SetText("")
+		else
+			valueInput:SetNumeric(true)
+			valueInput:SetText("0")
+		end
+	end
+end
 
 -- Row 2: Action dropdown + Priority + Group
 local actionLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -558,6 +700,9 @@ grpInput:SetScript("OnLeave", function()
 end)
 
 -- Row 3: Add button + New Group button
+-- Initialize value input for default condition type
+UpdateValueInput()
+
 local addBtn = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
 addBtn:SetSize(80, 22)
 addBtn:SetPoint("TOPLEFT", 6, -78)
@@ -565,13 +710,16 @@ addBtn:SetText("Add Rule")
 addBtn:SetScript("OnClick", function()
 	local condValue = 0
 	local condStr = ""
-	local inputText = valueInput:GetText() or ""
 
-	if selectedCondType == 7 then
-		condStr = inputText
+	-- Use dropdown value for types with dropdown, editbox for others
+	if selectedCondType == 0 or selectedCondType == 3
+	   or selectedCondType == 4 or selectedCondType == 5 then
+		condValue = selectedValueFromDropdown
+	elseif selectedCondType == 7 then
+		condStr = valueInput:GetText() or ""
 		condValue = 0
 	else
-		condValue = tonumber(inputText) or 0
+		condValue = tonumber(valueInput:GetText()) or 0
 	end
 
 	local priority = tonumber(priInput:GetText()) or 100
