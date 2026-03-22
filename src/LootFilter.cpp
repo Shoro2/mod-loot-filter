@@ -6,6 +6,7 @@
  */
 
 #include "LootFilter.h"
+#include <algorithm>
 #include "Chat.h"
 #include "CommandScript.h"
 #include "Config.h"
@@ -247,11 +248,11 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
     if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
         return FILTER_ACTION_KEEP;
 
-    // Group rules: ruleGroup=0 are standalone (OR),
-    // ruleGroup>0 are AND-combined within the same group.
-    // Different groups are OR-combined.
+    // Rules are sorted by priority ASC (lower = checked first).
+    // ruleGroup=0 are standalone (OR), ruleGroup>0 are AND-combined.
+    // All rules are evaluated together in priority order — first match wins.
 
-    // Collect grouped rules
+    // Collect grouped and standalone rules
     std::unordered_map<uint32, std::vector<FilterRule const*>> groups;
     std::vector<FilterRule const*> standalone;
 
@@ -265,33 +266,66 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
             groups[rule.ruleGroup].push_back(&rule);
     }
 
-    // Check standalone rules first (OR — first match wins)
-    for (auto const* rule : standalone)
+    // Build a unified list of evaluable entries sorted by priority.
+    // Each entry is either a standalone rule or an AND-group.
+    struct EvalEntry
     {
-        if (MatchesCondition(*rule, item, proto)
-            && IsActionAllowed(rule->action))
-            return static_cast<LootFilterAction>(rule->action);
-    }
+        uint8 priority;
+        // For standalone: single rule pointer; for groups: nullptr
+        FilterRule const* standaloneRule;
+        // For groups: group ID to look up in the map
+        uint32 groupId;
+    };
 
-    // Check AND groups (all conditions in group must match)
+    std::vector<EvalEntry> entries;
+    entries.reserve(standalone.size() + groups.size());
+
+    for (auto const* rule : standalone)
+        entries.push_back({ rule->priority, rule, 0 });
+
     for (auto const& [groupId, groupRules] : groups)
     {
-        bool allMatch = true;
-        for (auto const* rule : groupRules)
-        {
-            if (!MatchesCondition(*rule, item, proto))
-            {
-                allMatch = false;
-                break;
-            }
-        }
+        if (groupRules.empty())
+            continue;
+        // Group priority is the lowest (first) priority in the group
+        uint8 groupPri = groupRules.front()->priority;
+        entries.push_back({ groupPri, nullptr, groupId });
+    }
 
-        if (allMatch && !groupRules.empty())
+    // Sort by priority (stable to preserve insertion order for ties)
+    std::stable_sort(entries.begin(), entries.end(),
+        [](EvalEntry const& a, EvalEntry const& b)
+        { return a.priority < b.priority; });
+
+    // Evaluate in priority order — first match wins
+    for (auto const& entry : entries)
+    {
+        if (entry.standaloneRule)
         {
-            // Action comes from the first rule in the group
-            uint8 action = groupRules.front()->action;
-            if (IsActionAllowed(action))
-                return static_cast<LootFilterAction>(action);
+            // Standalone rule (OR)
+            if (MatchesCondition(*entry.standaloneRule, item, proto)
+                && IsActionAllowed(entry.standaloneRule->action))
+                return static_cast<LootFilterAction>(entry.standaloneRule->action);
+        }
+        else
+        {
+            // AND group — all conditions must match
+            auto const& groupRules = groups[entry.groupId];
+            bool allMatch = true;
+            for (auto const* rule : groupRules)
+            {
+                if (!MatchesCondition(*rule, item, proto))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+            if (allMatch && !groupRules.empty())
+            {
+                uint8 action = groupRules.front()->action;
+                if (IsActionAllowed(action))
+                    return static_cast<LootFilterAction>(action);
+            }
         }
     }
 
