@@ -265,12 +265,6 @@ if not LootFilter_HandlersRegistered then
 	LootFilter_HandlersRegistered = true
 end
 
--- ============================================================
--- Send data on login
--- ============================================================
-
--- Send data on login via AIO init hook
-AIO.AddOnInit(function(msg, player)
-	SendFilterData(player)
-	return msg
-end)
+-- No AIO.AddOnInit here — the client requests data when the UI
+-- is opened (/lf, minimap button), avoiding the race condition
+-- where data arrives before the client addon has loaded.
