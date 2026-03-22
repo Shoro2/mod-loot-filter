@@ -10,8 +10,10 @@
 #include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "EventProcessor.h"
 #include "Item.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -306,6 +308,8 @@ static void SellItem(Player* player, Item* item)
     uint32 count = item->GetCount();
     uint32 sellPrice = proto->SellPrice * count;
 
+    std::string itemName = proto->Name1;
+
     if (sellPrice > 0)
         player->ModifyMoney(sellPrice);
 
@@ -321,16 +325,15 @@ static void SellItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Sold %s for %s.",
-            proto->Name1.c_str(),
-            sellPrice > 0 ? std::to_string(sellPrice).c_str()
-                          : "0");
+            "|cff888888[Loot Filter]|r Sold %s for %u copper.",
+            itemName.c_str(), sellPrice);
     }
 }
 
 static void DisenchantItem(Player* player, Item* item)
 {
     ItemTemplate const* proto = item->GetTemplate();
+    std::string itemName = proto->Name1;
 
     // Check if player has enchanting skill
     if (!player->HasSkill(333)) // 333 = Enchanting
@@ -396,13 +399,14 @@ static void DisenchantItem(Player* player, Item* item)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
             "|cff888888[Loot Filter]|r Disenchanted %s.",
-            proto->Name1.c_str());
+            itemName.c_str());
     }
 }
 
 static void DeleteItem(Player* player, Item* item)
 {
     ItemTemplate const* proto = item->GetTemplate();
+    std::string itemName = proto->Name1;
 
     player->DestroyItem(
         item->GetBagSlot(), item->GetSlot(), true);
@@ -417,9 +421,50 @@ static void DeleteItem(Player* player, Item* item)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
             "|cff888888[Loot Filter]|r Deleted %s.",
-            proto->Name1.c_str());
+            itemName.c_str());
     }
 }
+
+// ============================================================
+// Deferred filter event — runs action on next server tick
+// ============================================================
+
+struct LootFilterEvent : public BasicEvent
+{
+    LootFilterEvent(Player* p, ObjectGuid itemGuid, LootFilterAction a)
+        : _playerGuid(p->GetGUID()), _itemGuid(itemGuid), _action(a) { }
+
+    bool Execute(uint64 /*time*/, uint32 /*diff*/) override
+    {
+        Player* player = ObjectAccessor::FindPlayer(_playerGuid);
+        if (!player)
+            return true;
+
+        Item* item = player->GetItemByGuid(_itemGuid);
+        if (!item)
+            return true;
+
+        switch (_action)
+        {
+            case FILTER_ACTION_SELL:
+                SellItem(player, item);
+                break;
+            case FILTER_ACTION_DISENCHANT:
+                DisenchantItem(player, item);
+                break;
+            case FILTER_ACTION_DELETE:
+                DeleteItem(player, item);
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
+    ObjectGuid _playerGuid;
+    ObjectGuid _itemGuid;
+    LootFilterAction _action;
+};
 
 // ============================================================
 // WorldScript — config loading
@@ -489,20 +534,13 @@ public:
 
         LootFilterAction action = EvaluateFilter(player, item);
 
-        switch (action)
+        if (action != FILTER_ACTION_KEEP)
         {
-            case FILTER_ACTION_SELL:
-                SellItem(player, item);
-                break;
-            case FILTER_ACTION_DISENCHANT:
-                DisenchantItem(player, item);
-                break;
-            case FILTER_ACTION_DELETE:
-                DeleteItem(player, item);
-                break;
-            case FILTER_ACTION_KEEP:
-            default:
-                break;
+            // Defer to next tick — item pointer is still in use by loot system
+            player->m_Events.AddEvent(
+                new LootFilterEvent(player, item->GetGUID(), action),
+                player->m_Events.CalculateTime(1));
+            return;
         }
     }
 };
