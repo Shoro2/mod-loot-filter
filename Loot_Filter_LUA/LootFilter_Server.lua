@@ -9,7 +9,7 @@
 local AIO = AIO or require("AIO")
 
 -- Register client addon for AIO transmission
-AIO.AddAddon("LootFilter_Client.lua")
+AIO.AddAddon("LootFilter/LootFilter_Client.lua")
 
 -- ============================================================
 -- Handler table (global for AIO reload safety)
