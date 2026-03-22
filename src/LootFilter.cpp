@@ -369,18 +369,6 @@ static void DisenchantItem(Player* player, Item* item)
     ItemTemplate const* proto = item->GetTemplate();
     std::string itemName = proto->Name1;
 
-    // Check if player has enchanting skill
-    if (!player->HasSkill(333)) // 333 = Enchanting
-    {
-        if (conf_LogActions)
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff888888[Loot Filter]|r Cannot DE {} (no Enchanting), selling instead.",
-                itemName);
-        if (conf_AllowSell)
-            SellItem(player, item);
-        return;
-    }
-
     // Check if item has a disenchant loot template
     if (proto->DisenchantID == 0)
     {
