@@ -333,6 +333,25 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
 }
 
 // ============================================================
+// Copper → Gold/Silver/Copper formatting
+// ============================================================
+
+static std::string FormatMoney(uint32 copper)
+{
+    uint32 gold = copper / 10000;
+    uint32 silver = (copper % 10000) / 100;
+    uint32 cop = copper % 100;
+
+    std::string result;
+    if (gold > 0)
+        result += std::to_string(gold) + "g ";
+    if (silver > 0 || gold > 0)
+        result += std::to_string(silver) + "s ";
+    result += std::to_string(cop) + "c";
+    return result;
+}
+
+// ============================================================
 // Endless Storage integration — deposit eligible items directly
 // ============================================================
 
@@ -400,10 +419,16 @@ static void SellItem(Player* player, Item* item)
     uint32 count = item->GetCount();
     uint32 sellPrice = proto->SellPrice * count;
 
+    // Don't sell items with no sell value — keep them instead
+    if (sellPrice == 0)
+    {
+        KeepItem(player, item);
+        return;
+    }
+
     std::string itemName = proto->Name1;
 
-    if (sellPrice > 0)
-        player->ModifyMoney(sellPrice);
+    player->ModifyMoney(sellPrice);
 
     player->DestroyItem(
         item->GetBagSlot(), item->GetSlot(), true);
@@ -417,8 +442,8 @@ static void SellItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Sold {} for {} copper.",
-            itemName, sellPrice);
+            "|cff888888[Loot Filter]|r Sold {} for {}.",
+            itemName, FormatMoney(sellPrice));
     }
 }
 
@@ -430,12 +455,12 @@ static void DisenchantItem(Player* player, Item* item)
     // Check if item has a disenchant loot template
     if (proto->DisenchantID == 0)
     {
+        // Not disenchantable — keep instead
         if (conf_LogActions)
             ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), selling instead.",
+                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), keeping.",
                 itemName);
-        if (conf_AllowSell)
-            SellItem(player, item);
+        KeepItem(player, item);
         return;
     }
 
@@ -538,7 +563,13 @@ struct LootFilterEvent : public BasicEvent
         if (!item)
             return true;
 
-        switch (_action)
+        // FILTER_ACTION_MAX is a sentinel meaning "evaluate now"
+        // (deferred so enchantments from other modules are applied)
+        LootFilterAction action = _action;
+        if (action == FILTER_ACTION_MAX)
+            action = EvaluateFilter(player, item);
+
+        switch (action)
         {
             case FILTER_ACTION_KEEP:
                 KeepItem(player, item);
@@ -636,20 +667,13 @@ public:
         LoadRulesForPlayer(guid);
         LoadSettingsForPlayer(guid);
 
-        LootFilterAction action = EvaluateFilter(player, item);
-
-        if (action == FILTER_ACTION_KEEP)
-        {
-            // Defer Keep+Storage to next tick (item still in loot system)
-            player->m_Events.AddEvent(
-                new LootFilterEvent(player, item->GetGUID(), FILTER_ACTION_KEEP),
-                player->m_Events.CalculateTime(1));
-            return;
-        }
-
-        // Defer to next tick — item pointer is still in use by loot system
+        // Defer evaluation to next tick so that other modules
+        // (e.g. mod-paragon-itemgen) have finished setting
+        // enchantments on the item. This is critical for cursed
+        // item detection which reads slot 11 enchantment IDs.
         player->m_Events.AddEvent(
-            new LootFilterEvent(player, item->GetGUID(), action),
+            new LootFilterEvent(player, item->GetGUID(),
+                FILTER_ACTION_MAX),  // sentinel: evaluate later
             player->m_Events.CalculateTime(1));
     }
 };
