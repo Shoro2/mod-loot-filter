@@ -458,6 +458,7 @@ condDropdown:SetPoint("LEFT", condTypeLabel, "RIGHT", -8, -2)
 UIDropDownMenu_SetWidth(condDropdown, 130)
 
 local selectedCondType = 0
+local UpdateValueInput -- forward declaration
 
 local function CondDropdown_Init()
 	for i = 0, 7 do
@@ -595,7 +596,7 @@ end
 UIDropDownMenu_Initialize(valueDropdown, ValueDropdown_Init)
 
 -- Show/hide the right input based on condition type
-local function UpdateValueInput()
+UpdateValueInput = function()
 	-- Types that use dropdown: Quality(0), ItemClass(3), Subclass(4), Cursed(5)
 	if selectedCondType == 0 or selectedCondType == 3
 	   or selectedCondType == 4 or selectedCondType == 5 then
