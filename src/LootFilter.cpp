@@ -333,8 +333,85 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
 }
 
 // ============================================================
+// Copper → Gold/Silver/Copper formatting
+// ============================================================
+
+static std::string FormatMoney(uint32 copper)
+{
+    uint32 gold = copper / 10000;
+    uint32 silver = (copper % 10000) / 100;
+    uint32 cop = copper % 100;
+
+    std::string result;
+    if (gold > 0)
+        result += std::to_string(gold) + "g ";
+    if (silver > 0 || gold > 0)
+        result += std::to_string(silver) + "s ";
+    result += std::to_string(cop) + "c";
+    return result;
+}
+
+// ============================================================
+// Endless Storage integration — deposit eligible items directly
+// ============================================================
+
+static bool IsStorageEligible(ItemTemplate const* proto)
+{
+    if (proto->Class == ICLASS_RECIPE)
+        return true;
+    if (proto->Class == ICLASS_CONSUMABLE && proto->SubClass == 5
+        && proto->GetMaxStackSize() > 1)
+        return true;
+    if ((proto->Class == ICLASS_TRADE_GOODS || proto->Class == ICLASS_GEM)
+        && proto->GetMaxStackSize() > 1)
+        return true;
+    return false;
+}
+
+static void DepositToStorage(uint32 guid, uint32 entry,
+    uint32 itemClass, uint32 itemSubclass, uint32 count)
+{
+    CharacterDatabase.Execute(
+        "INSERT INTO custom_endless_storage "
+        "(character_id, item_entry, item_class, item_subclass, amount) "
+        "VALUES ({}, {}, {}, {}, {}) "
+        "ON DUPLICATE KEY UPDATE amount = amount + {}",
+        guid, entry, itemClass, itemSubclass, count, count);
+}
+
+// ============================================================
 // Action execution
 // ============================================================
+
+static void KeepItem(Player* player, Item* item)
+{
+    ItemTemplate const* proto = item->GetTemplate();
+    if (!proto)
+        return;
+
+    // If eligible for endless storage, deposit and remove from inventory
+    if (IsStorageEligible(proto))
+    {
+        uint32 guid = player->GetGUID().GetCounter();
+        uint32 count = item->GetCount();
+        DepositToStorage(guid, proto->ItemId, proto->Class,
+            proto->SubClass, count);
+        player->DestroyItem(
+            item->GetBagSlot(), item->GetSlot(), true);
+
+        if (conf_LogActions)
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff888888[Loot Filter]|r Stored [{}] x{} in Storage.",
+                proto->Name1, count);
+        return;
+    }
+
+    // Not storage-eligible, just keep in inventory
+    if (conf_LogActions)
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "|cff888888[Loot Filter]|r Keeping [{}].",
+            proto->Name1);
+}
 
 static void SellItem(Player* player, Item* item)
 {
@@ -342,10 +419,16 @@ static void SellItem(Player* player, Item* item)
     uint32 count = item->GetCount();
     uint32 sellPrice = proto->SellPrice * count;
 
+    // Don't sell items with no sell value — keep them instead
+    if (sellPrice == 0)
+    {
+        KeepItem(player, item);
+        return;
+    }
+
     std::string itemName = proto->Name1;
 
-    if (sellPrice > 0)
-        player->ModifyMoney(sellPrice);
+    player->ModifyMoney(sellPrice);
 
     player->DestroyItem(
         item->GetBagSlot(), item->GetSlot(), true);
@@ -359,8 +442,8 @@ static void SellItem(Player* player, Item* item)
     if (conf_LogActions)
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Sold {} for {} copper.",
-            itemName, sellPrice);
+            "|cff888888[Loot Filter]|r Sold {} for {}.",
+            itemName, FormatMoney(sellPrice));
     }
 }
 
@@ -372,38 +455,53 @@ static void DisenchantItem(Player* player, Item* item)
     // Check if item has a disenchant loot template
     if (proto->DisenchantID == 0)
     {
+        // Not disenchantable — keep instead
         if (conf_LogActions)
             ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), selling instead.",
+                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), keeping.",
                 itemName);
-        if (conf_AllowSell)
-            SellItem(player, item);
+        KeepItem(player, item);
         return;
     }
 
-    // Generate disenchant loot and give materials to player
+    // Generate disenchant loot and deposit materials into storage
     Loot loot;
     loot.FillLoot(proto->DisenchantID,
         LootTemplates_Disenchant, player, true);
 
+    uint32 guid = player->GetGUID().GetCounter();
     for (uint32 i = 0; i < loot.items.size(); ++i)
     {
         LootItem const& lootItem = loot.items[i];
-        ItemPosCountVec dest;
-        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT,
-            dest, lootItem.itemid, lootItem.count) == EQUIP_ERR_OK)
+        ItemTemplate const* matProto =
+            sObjectMgr->GetItemTemplate(lootItem.itemid);
+        if (matProto && IsStorageEligible(matProto))
         {
-            Item* newItem = player->StoreNewItem(
-                dest, lootItem.itemid, true);
-            if (newItem)
-                player->SendNewItem(newItem, lootItem.count,
-                    true, false);
+            DepositToStorage(guid, lootItem.itemid,
+                matProto->Class, matProto->SubClass, lootItem.count);
+            if (conf_LogActions)
+                ChatHandler(player->GetSession()).PSendSysMessage(
+                    "|cff888888[Loot Filter]|r   → [{}] x{} stored.",
+                    matProto->Name1, lootItem.count);
         }
         else
         {
-            // Mail overflow materials
-            player->SendItemRetrievalMail(
-                lootItem.itemid, lootItem.count);
+            // Non-eligible material goes to inventory
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT,
+                dest, lootItem.itemid, lootItem.count) == EQUIP_ERR_OK)
+            {
+                Item* newItem = player->StoreNewItem(
+                    dest, lootItem.itemid, true);
+                if (newItem)
+                    player->SendNewItem(newItem, lootItem.count,
+                        true, false);
+            }
+            else
+            {
+                player->SendItemRetrievalMail(
+                    lootItem.itemid, lootItem.count);
+            }
         }
     }
 
@@ -411,7 +509,6 @@ static void DisenchantItem(Player* player, Item* item)
     player->DestroyItem(
         item->GetBagSlot(), item->GetSlot(), true);
 
-    uint32 guid = player->GetGUID().GetCounter();
     {
         std::lock_guard<std::mutex> lock(s_filterMutex);
         s_filterSettings[guid].totalDisenchanted++;
@@ -466,8 +563,17 @@ struct LootFilterEvent : public BasicEvent
         if (!item)
             return true;
 
-        switch (_action)
+        // FILTER_ACTION_MAX is a sentinel meaning "evaluate now"
+        // (deferred so enchantments from other modules are applied)
+        LootFilterAction action = _action;
+        if (action == FILTER_ACTION_MAX)
+            action = EvaluateFilter(player, item);
+
+        switch (action)
         {
+            case FILTER_ACTION_KEEP:
+                KeepItem(player, item);
+                break;
             case FILTER_ACTION_SELL:
                 SellItem(player, item);
                 break;
@@ -561,24 +667,13 @@ public:
         LoadRulesForPlayer(guid);
         LoadSettingsForPlayer(guid);
 
-        LootFilterAction action = EvaluateFilter(player, item);
-
-        if (action == FILTER_ACTION_KEEP)
-        {
-            if (conf_LogActions)
-            {
-                ItemTemplate const* proto = item->GetTemplate();
-                if (proto)
-                    ChatHandler(player->GetSession()).PSendSysMessage(
-                        "|cff888888[Loot Filter]|r Keeping [{}].",
-                        proto->Name1);
-            }
-            return;
-        }
-
-        // Defer to next tick — item pointer is still in use by loot system
+        // Defer evaluation to next tick so that other modules
+        // (e.g. mod-paragon-itemgen) have finished setting
+        // enchantments on the item. This is critical for cursed
+        // item detection which reads slot 11 enchantment IDs.
         player->m_Events.AddEvent(
-            new LootFilterEvent(player, item->GetGUID(), action),
+            new LootFilterEvent(player, item->GetGUID(),
+                FILTER_ACTION_MAX),  // sentinel: evaluate later
             player->m_Events.CalculateTime(1));
     }
 };
