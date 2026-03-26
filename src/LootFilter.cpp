@@ -46,6 +46,7 @@ struct FilterRule
     uint32 ruleId;
     uint32 ruleGroup;       // 0 = standalone, >0 = AND group
     uint8  conditionType;   // LootFilterCondition
+    uint8  conditionOp;     // LootFilterOp (0=equal, 1=greater, 2=less)
     uint32 conditionValue;  // numeric value for the condition
     std::string conditionStr; // string value (for name contains)
     uint8  action;          // LootFilterAction
@@ -76,7 +77,7 @@ static std::unordered_map<uint32, PlayerFilterSettings> s_filterSettings;
 static void LoadRulesForPlayer(uint32 guid)
 {
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `ruleId`, `ruleGroup`, `conditionType`, "
+        "SELECT `ruleId`, `ruleGroup`, `conditionType`, `conditionOp`, "
         "`conditionValue`, `conditionStr`, `action`, "
         "`priority`, `enabled` "
         "FROM `character_loot_filter` WHERE `characterId` = {} "
@@ -92,11 +93,12 @@ static void LoadRulesForPlayer(uint32 guid)
             r.ruleId        = fields[0].Get<uint32>();
             r.ruleGroup     = fields[1].Get<uint32>();
             r.conditionType = fields[2].Get<uint8>();
-            r.conditionValue = fields[3].Get<uint32>();
-            r.conditionStr  = fields[4].Get<std::string>();
-            r.action        = fields[5].Get<uint8>();
-            r.priority      = fields[6].Get<uint8>();
-            r.enabled       = fields[7].Get<bool>();
+            r.conditionOp   = fields[3].Get<uint8>();
+            r.conditionValue = fields[4].Get<uint32>();
+            r.conditionStr  = fields[5].Get<std::string>();
+            r.action        = fields[6].Get<uint8>();
+            r.priority      = fields[7].Get<uint8>();
+            r.enabled       = fields[8].Get<bool>();
             rules.push_back(r);
         } while (result->NextRow());
     }
@@ -173,32 +175,49 @@ static bool IsParagonCursedItem(Item const* item)
 // Filter matching logic
 // ============================================================
 
+static bool CompareNumeric(uint32 actual, uint8 op, uint32 expected)
+{
+    switch (op)
+    {
+        case FILTER_OP_EQUAL:   return actual == expected;
+        case FILTER_OP_GREATER: return actual > expected;
+        case FILTER_OP_LESS:    return actual < expected;
+        default:                return actual == expected;
+    }
+}
+
 static bool MatchesCondition(FilterRule const& rule,
     Item const* item, ItemTemplate const* proto)
 {
     switch (rule.conditionType)
     {
         case FILTER_COND_QUALITY:
-            return proto->Quality == rule.conditionValue;
+            return CompareNumeric(proto->Quality,
+                rule.conditionOp, rule.conditionValue);
 
-        case FILTER_COND_ILVL_BELOW:
-            return proto->ItemLevel < rule.conditionValue;
+        case FILTER_COND_ILVL:
+            return CompareNumeric(proto->ItemLevel,
+                rule.conditionOp, rule.conditionValue);
 
-        case FILTER_COND_SELL_PRICE_BELOW:
-            return proto->SellPrice < rule.conditionValue;
+        case FILTER_COND_SELL_PRICE:
+            return CompareNumeric(proto->SellPrice,
+                rule.conditionOp, rule.conditionValue);
 
         case FILTER_COND_ITEM_CLASS:
-            return proto->Class == rule.conditionValue;
+            return CompareNumeric(proto->Class,
+                rule.conditionOp, rule.conditionValue);
 
         case FILTER_COND_ITEM_SUBCLASS:
-            return proto->SubClass == rule.conditionValue;
+            return CompareNumeric(proto->SubClass,
+                rule.conditionOp, rule.conditionValue);
 
         case FILTER_COND_IS_CURSED:
             return IsParagonCursedItem(item)
                    == (rule.conditionValue != 0);
 
         case FILTER_COND_ITEM_ID:
-            return proto->ItemId == rule.conditionValue;
+            return CompareNumeric(proto->ItemId,
+                rule.conditionOp, rule.conditionValue);
 
         case FILTER_COND_NAME_CONTAINS:
         {

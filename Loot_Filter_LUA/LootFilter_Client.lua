@@ -29,9 +29,9 @@ local nextGroupId = 1
 -- ============================================================
 
 local CONDITION_LABELS = {
-	[0] = "Quality equals",
-	[1] = "Item Level below",
-	[2] = "Sell Price below (copper)",
+	[0] = "Quality",
+	[1] = "Item Level",
+	[2] = "Sell Price (copper)",
 	[3] = "Item Class",
 	[4] = "Item Subclass",
 	[5] = "Is Cursed Item",
@@ -41,13 +41,37 @@ local CONDITION_LABELS = {
 
 local CONDITION_SHORT = {
 	[0] = "Quality",
-	[1] = "iLvl <",
-	[2] = "Price <",
+	[1] = "iLvl",
+	[2] = "Price",
 	[3] = "Class",
 	[4] = "Subclass",
 	[5] = "Cursed",
 	[6] = "Item ID",
 	[7] = "Name ~=",
+}
+
+local OP_LABELS = {
+	[0] = "= (equals)",
+	[1] = "> (greater)",
+	[2] = "< (less)",
+}
+
+local OP_SHORT = {
+	[0] = "=",
+	[1] = ">",
+	[2] = "<",
+}
+
+-- Condition types that support operator selection (numeric comparisons)
+local COND_SUPPORTS_OP = {
+	[0] = true,  -- Quality
+	[1] = true,  -- Item Level
+	[2] = true,  -- Sell Price
+	[3] = true,  -- Item Class
+	[4] = true,  -- Item Subclass
+	[5] = false, -- Is Cursed (boolean)
+	[6] = true,  -- Item ID
+	[7] = false, -- Name contains (string)
 }
 
 local ACTION_LABELS = {
@@ -484,6 +508,7 @@ local function UpdateRuleList()
 
 			-- Build condition display text
 			local condLabel = CONDITION_SHORT[rule.conditionType] or "?"
+			local opStr = OP_SHORT[rule.conditionOp] or "="
 			local valueStr
 			if rule.conditionType == 0 then
 				valueStr = QUALITY_LABELS[rule.conditionValue] or tostring(rule.conditionValue)
@@ -495,8 +520,10 @@ local function UpdateRuleList()
 					or tostring(rule.conditionValue)
 			elseif rule.conditionType == 5 then
 				valueStr = rule.conditionValue == 1 and "|cff9b59b6Cursed|r" or "Not Cursed"
+				opStr = ""
 			elseif rule.conditionType == 7 then
 				valueStr = '"' .. (rule.conditionStr or "") .. '"'
+				opStr = ""
 			elseif rule.conditionType == 2 then
 				local g = math.floor(rule.conditionValue / 10000)
 				local s = math.floor((rule.conditionValue % 10000) / 100)
@@ -504,6 +531,10 @@ local function UpdateRuleList()
 				valueStr = string.format("%dg %ds %dc", g, s, c)
 			else
 				valueStr = tostring(rule.conditionValue)
+			end
+			-- Insert operator between label and value for types that use it
+			if opStr ~= "" then
+				condLabel = condLabel .. " " .. opStr
 			end
 
 			-- AND indicator for grouped rules
@@ -635,9 +666,38 @@ UIDropDownMenu_Initialize(condDropdown, CondDropdown_Init)
 UIDropDownMenu_SetSelectedValue(condDropdown, 0)
 UIDropDownMenu_SetText(condDropdown, CONDITION_LABELS[0])
 
+-- Operator dropdown (=, >, <)
+local opLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+opLabel:SetPoint("LEFT", condDropdown, "RIGHT", 4, 2)
+opLabel:SetText("Op:")
+
+local opDropdown = CreateFrame("Frame", "LootFilterOpDropdown", footerFrame, "UIDropDownMenuTemplate")
+opDropdown:SetPoint("LEFT", opLabel, "RIGHT", -8, -2)
+UIDropDownMenu_SetWidth(opDropdown, 60)
+
+local selectedOp = 0
+
+local function OpDropdown_Init()
+	for i = 0, 2 do
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = OP_LABELS[i]
+		info.value = i
+		info.func = function(self)
+			selectedOp = self.value
+			UIDropDownMenu_SetSelectedValue(opDropdown, self.value)
+			UIDropDownMenu_SetText(opDropdown, OP_LABELS[self.value])
+		end
+		UIDropDownMenu_AddButton(info)
+	end
+end
+
+UIDropDownMenu_Initialize(opDropdown, OpDropdown_Init)
+UIDropDownMenu_SetSelectedValue(opDropdown, 0)
+UIDropDownMenu_SetText(opDropdown, OP_LABELS[0])
+
 -- Value area: dynamic input based on condition type
 local valueLabel = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-valueLabel:SetPoint("LEFT", condDropdown, "RIGHT", 4, 2)
+valueLabel:SetPoint("LEFT", opDropdown, "RIGHT", 4, 2)
 valueLabel:SetText("Value:")
 
 -- EditBox for numeric/text input (iLvl, price, itemId, name)
@@ -753,6 +813,15 @@ UIDropDownMenu_Initialize(valueDropdown, ValueDropdown_Init)
 
 -- Show/hide the right input based on condition type
 UpdateValueInput = function()
+	-- Show/hide operator dropdown based on condition type
+	if COND_SUPPORTS_OP[selectedCondType] then
+		opLabel:Show()
+		opDropdown:Show()
+	else
+		opLabel:Hide()
+		opDropdown:Hide()
+	end
+
 	-- Types that use dropdown: Quality(0), ItemClass(3), Subclass(4), Cursed(5)
 	if selectedCondType == 0 or selectedCondType == 3
 	   or selectedCondType == 4 or selectedCondType == 5 then
@@ -881,9 +950,10 @@ addBtn:SetScript("OnClick", function()
 
 	local priority = tonumber(priInput:GetText()) or 100
 	local ruleGroup = tonumber(grpInput:GetText()) or 0
+	local condOp = COND_SUPPORTS_OP[selectedCondType] and selectedOp or 0
 
 	AIO.Handle("LootFilter", "AddRule",
-		selectedCondType, condValue, condStr,
+		selectedCondType, condOp, condValue, condStr,
 		selectedAction, priority, ruleGroup)
 end)
 
@@ -945,7 +1015,7 @@ local presetLabel = presetFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal
 presetLabel:SetPoint("LEFT", 4, 0)
 presetLabel:SetText("|cffaaaaaaPresets:|r")
 
-local function MakePresetBtn(parent, text, x, condType, condValue, condStr, action, priority, tooltip)
+local function MakePresetBtn(parent, text, x, condType, condOp, condValue, condStr, action, priority, tooltip)
 	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
 	btn:SetSize(90, 20)
 	btn:SetPoint("LEFT", x, 0)
@@ -953,7 +1023,7 @@ local function MakePresetBtn(parent, text, x, condType, condValue, condStr, acti
 	btn:SetNormalFontObject("GameFontNormalSmall")
 	btn:SetScript("OnClick", function()
 		AIO.Handle("LootFilter", "AddRule",
-			condType, condValue, condStr or "", action, priority, 0)
+			condType, condOp, condValue, condStr or "", action, priority, 0)
 	end)
 	btn:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -966,15 +1036,15 @@ local function MakePresetBtn(parent, text, x, condType, condValue, condStr, acti
 	return btn
 end
 
-MakePresetBtn(presetFrame, "Sell Grey", 52, 0, 0, "", 1, 10,
+MakePresetBtn(presetFrame, "Sell Grey", 52, 0, 0, 0, "", 1, 10,
 	"Auto-sell all Poor (grey) quality items")
-MakePresetBtn(presetFrame, "Sell White", 148, 0, 1, "", 1, 20,
+MakePresetBtn(presetFrame, "Sell White", 148, 0, 0, 1, "", 1, 20,
 	"Auto-sell all Normal (white) quality items")
-MakePresetBtn(presetFrame, "DE Green", 244, 0, 2, "", 2, 30,
+MakePresetBtn(presetFrame, "DE Green", 244, 0, 0, 2, "", 2, 30,
 	"Auto-disenchant all Uncommon (green) items")
-MakePresetBtn(presetFrame, "Del <iLvl50", 340, 1, 50, "", 3, 15,
+MakePresetBtn(presetFrame, "Del <iLvl50", 340, 1, 2, 50, "", 3, 15,
 	"Delete items with item level below 50")
-MakePresetBtn(presetFrame, "Keep Cursed", 436, 5, 1, "", 0, 1,
+MakePresetBtn(presetFrame, "Keep Cursed", 436, 5, 0, 1, "", 0, 1,
 	"Always keep Cursed items (whitelist)")
 
 -- ============================================================
@@ -1118,11 +1188,12 @@ LootFilter_ClientHandlers.ClearRules = function(player)
 	rules = {}
 end
 
-LootFilter_ClientHandlers.ReceiveRule = function(player, ruleId, ruleGroup, condType, condValue, condStr, action, priority, enabled)
+LootFilter_ClientHandlers.ReceiveRule = function(player, ruleId, ruleGroup, condType, condOp, condValue, condStr, action, priority, enabled)
 	table.insert(rules, {
 		ruleId = ruleId,
 		ruleGroup = ruleGroup or 0,
 		conditionType = condType,
+		conditionOp = condOp or 0,
 		conditionValue = condValue,
 		conditionStr = condStr or "",
 		action = action,

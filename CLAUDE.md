@@ -16,6 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Per-character filter rules** stored in `character_loot_filter` DB table
 - **8 condition types**: Quality, Item Level, Sell Price, Item Class, Item Subclass, Cursed Status, Item ID, Name Contains
+- **3 comparison operators**: Equals (=), Greater (>), Less (<) — selectable per rule for numeric conditions
 - **4 actions**: Keep (whitelist), Auto-Sell, Disenchant, Delete
 - **Priority system**: Rules are evaluated in priority order (lower = first); first match wins
 - **AIO UI**: Full in-game frame with rule list, add form, presets, minimap button
@@ -25,14 +26,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Type | ID | Description | Value |
 |------|----|-------------|-------|
-| Quality | 0 | Item quality equals | 0=Poor, 1=Normal, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary |
-| Item Level Below | 1 | Item level < value | Numeric item level |
-| Sell Price Below | 2 | Vendor price < value | Copper amount |
-| Item Class | 3 | Item class equals | 0=Consumable, 2=Weapon, 4=Armor, 7=Trade Goods, etc. |
-| Item Subclass | 4 | Item subclass equals | Weapon/armor subtype |
+| Quality | 0 | Item quality (with operator) | 0=Poor, 1=Normal, 2=Uncommon, 3=Rare, 4=Epic, 5=Legendary |
+| Item Level | 1 | Item level (with operator) | Numeric item level |
+| Sell Price | 2 | Vendor price (with operator) | Copper amount |
+| Item Class | 3 | Item class (with operator) | 0=Consumable, 2=Weapon, 4=Armor, 7=Trade Goods, etc. |
+| Item Subclass | 4 | Item subclass (with operator) | Weapon/armor subtype |
 | Is Cursed | 5 | Paragon cursed item | 1=cursed, 0=not cursed |
-| Item ID | 6 | Specific item entry | Item template entry ID |
+| Item ID | 6 | Specific item entry (with operator) | Item template entry ID |
 | Name Contains | 7 | Name substring match | Case-insensitive string |
+
+### Comparison Operators
+
+| Operator | ID | Symbol | Description |
+|----------|----|--------|-------------|
+| Equals | 0 | = | Value must match exactly |
+| Greater | 1 | > | Value must be greater than |
+| Less | 2 | < | Value must be less than |
+
+Operators are available for all numeric condition types (0-4, 6). Boolean (Is Cursed) and string (Name Contains) conditions ignore the operator.
 
 ### Filter Actions
 
@@ -76,6 +87,7 @@ Per-character filter rules.
 | `characterId` | INT UNSIGNED | — | Character GUID |
 | `ruleId` | INT UNSIGNED (PK, AUTO_INCREMENT) | — | Unique rule ID |
 | `conditionType` | TINYINT UNSIGNED | 0 | LootFilterCondition enum |
+| `conditionOp` | TINYINT UNSIGNED | 0 | LootFilterOp enum (0=equals, 1=greater, 2=less) |
 | `conditionValue` | INT UNSIGNED | 0 | Numeric condition value |
 | `conditionStr` | VARCHAR(128) | '' | String value (for name contains) |
 | `action` | TINYINT UNSIGNED | 1 | LootFilterAction enum |

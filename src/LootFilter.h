@@ -34,14 +34,25 @@ enum LootFilterAction : uint8
 enum LootFilterCondition : uint8
 {
     FILTER_COND_QUALITY         = 0,  // item quality (0-7)
-    FILTER_COND_ILVL_BELOW      = 1,  // item level < value
-    FILTER_COND_SELL_PRICE_BELOW = 2, // vendor price < value (copper)
+    FILTER_COND_ILVL            = 1,  // item level
+    FILTER_COND_SELL_PRICE      = 2,  // vendor price (copper)
     FILTER_COND_ITEM_CLASS      = 3,  // item class (0=consumable, 2=weapon, 4=armor, ...)
     FILTER_COND_ITEM_SUBCLASS   = 4,  // item subclass (weapon/armor subtype)
     FILTER_COND_IS_CURSED       = 5,  // cursed paragon item (slot 11 marker)
     FILTER_COND_ITEM_ID         = 6,  // specific item entry
     FILTER_COND_NAME_CONTAINS   = 7,  // item name contains string
     FILTER_COND_MAX
+};
+
+// ============================================================
+// Filter comparison operator
+// ============================================================
+enum LootFilterOp : uint8
+{
+    FILTER_OP_EQUAL     = 0,  // ==
+    FILTER_OP_GREATER   = 1,  // >
+    FILTER_OP_LESS      = 2,  // <
+    FILTER_OP_MAX
 };
 
 // ============================================================

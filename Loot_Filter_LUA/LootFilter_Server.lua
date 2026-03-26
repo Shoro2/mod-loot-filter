@@ -60,9 +60,9 @@ local function SendFilterData(player)
 	msg:Add("LootFilter", "ReceiveSettings",
 		filterEnabled, totalSold, totalDE, totalDel, MAX_RULES)
 
-	-- Load rules (including ruleGroup)
+	-- Load rules (including ruleGroup and conditionOp)
 	local rulesQ = CharDBQuery(string.format(
-		"SELECT `ruleId`, `ruleGroup`, `conditionType`, `conditionValue`, `conditionStr`, "..
+		"SELECT `ruleId`, `ruleGroup`, `conditionType`, `conditionOp`, `conditionValue`, `conditionStr`, "..
 		"`action`, `priority`, `enabled` "..
 		"FROM `character_loot_filter` WHERE `characterId` = %d "..
 		"ORDER BY `ruleGroup` ASC, `priority` ASC", guid))
@@ -75,14 +75,15 @@ local function SendFilterData(player)
 			local ruleId = rulesQ:GetUInt32(0)
 			local ruleGroup = rulesQ:GetUInt32(1)
 			local condType = rulesQ:GetUInt32(2)
-			local condValue = rulesQ:GetUInt32(3)
-			local condStr = rulesQ:GetString(4)
-			local action = rulesQ:GetUInt32(5)
-			local priority = rulesQ:GetUInt32(6)
-			local enabled = rulesQ:GetUInt32(7)
+			local condOp = rulesQ:GetUInt32(3)
+			local condValue = rulesQ:GetUInt32(4)
+			local condStr = rulesQ:GetString(5)
+			local action = rulesQ:GetUInt32(6)
+			local priority = rulesQ:GetUInt32(7)
+			local enabled = rulesQ:GetUInt32(8)
 
 			msg:Add("LootFilter", "ReceiveRule",
-				ruleId, ruleGroup, condType, condValue, condStr,
+				ruleId, ruleGroup, condType, condOp, condValue, condStr,
 				action, priority, enabled)
 		until not rulesQ:NextRow()
 	end
@@ -103,11 +104,12 @@ end
 -- Handler: Add a new rule
 -- ============================================================
 
-LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condStr, action, priority, ruleGroup)
+LootFilter_ServerHandlers.AddRule = function(player, condType, condOp, condValue, condStr, action, priority, ruleGroup)
 	local guid = player:GetGUIDLow()
 
 	-- Validate inputs
 	condType = tonumber(condType) or 0
+	condOp = tonumber(condOp) or 0
 	condValue = tonumber(condValue) or 0
 	condStr = tostring(condStr or "")
 	action = tonumber(action) or 1
@@ -115,6 +117,7 @@ LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condSt
 	ruleGroup = tonumber(ruleGroup) or 0
 
 	if condType < 0 or condType > 7 then return end
+	if condOp < 0 or condOp > 2 then condOp = 0 end
 	if action < 0 or action > 3 then return end
 	if priority < 0 or priority > 255 then priority = 100 end
 	if ruleGroup < 0 then ruleGroup = 0 end
@@ -137,9 +140,9 @@ LootFilter_ServerHandlers.AddRule = function(player, condType, condValue, condSt
 	-- Use CharDBQuery (synchronous) so the subsequent SELECT sees the new row
 	CharDBQuery(string.format(
 		"INSERT INTO `character_loot_filter` "..
-		"(`characterId`, `ruleGroup`, `conditionType`, `conditionValue`, `conditionStr`, `action`, `priority`, `enabled`) "..
-		"VALUES (%d, %d, %d, %d, '%s', %d, %d, 1)",
-		guid, ruleGroup, condType, condValue, condStr, action, priority))
+		"(`characterId`, `ruleGroup`, `conditionType`, `conditionOp`, `conditionValue`, `conditionStr`, `action`, `priority`, `enabled`) "..
+		"VALUES (%d, %d, %d, %d, %d, '%s', %d, %d, 1)",
+		guid, ruleGroup, condType, condOp, condValue, condStr, action, priority))
 
 	player:SendBroadcastMessage("|cff00cc00[Loot Filter]|r Rule added.")
 
