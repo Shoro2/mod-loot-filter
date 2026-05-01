@@ -2,10 +2,6 @@
 
 > Offene Aufgaben für dieses Modul. Erledigte TODOs in `log.md` festhalten und hier entfernen.
 
-## Sicherheit
-
-- [ ] **(mittel)** SQL-Injection-Risiko in Lua: `LootFilter_Server.lua` nutzt `CharDBExecute` mit String-Concat (Eluna kennt keine Prepared Statements). Mitigation: pro Handler-Arg explizite Validierung (Typ-Check, Whitelist für `conditionType`/`action`/`operator`, Length-Limit für `conditionStr`).
-
 ## Funktionale Verbesserungen
 
 - [ ] **(niedrig)** Per-Item-Klassen-Konfiguration für `LootTemplates_Disenchant`: aktuell wird das globale Disenchant-Template verwendet. Wäre nett: optional pro Quality-Stufe einen Bonus-Faktor.
