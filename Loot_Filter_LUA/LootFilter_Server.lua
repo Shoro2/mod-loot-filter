@@ -8,6 +8,28 @@
 
 local AIO = AIO or require("AIO")
 
+-- Optional dependency: shared validation lib (share-public/AIO_Server/Dep_Validation/).
+-- Eluna lädt scripts alphabetisch, `Dep_*` kommt vor `Loot_Filter_LUA/` →
+-- Lib ist zur Loadzeit da. Ohne Lib läuft das Modul mit permissiveren Shims
+-- weiter, gibt aber eine Warning aus.
+local Validate = _G.Validate
+if not Validate then
+	print("[LootFilter] WARNING: Dep_Validation/validation.lua nicht geladen — input validation läuft permissiv. Bitte share-public/AIO_Server/Dep_Validation/ nach lua_scripts/ deployen.")
+	Validate = {
+		IsInt = function(v) return type(v) == "number" and v == math.floor(v) end,
+		IsIntInRange = function(v, lo, hi) return type(v) == "number" and v == math.floor(v) and v >= lo and v <= hi end,
+		IsNonNegativeInt = function(v, cap) return type(v) == "number" and v == math.floor(v) and v >= 0 and v <= (cap or 2147483647) end,
+		IsStringMaxLen = function(s, n) return type(s) == "string" and #s <= n end,
+		IsInWhitelist = function(v, set) return set[v] == true end,
+		ToSet = function(list) local s = {} for _, v in ipairs(list) do s[v] = true end return s end,
+		SqlEscape = function(s) if type(s) ~= "string" then return "" end return (s:gsub("'", "''"):gsub("\\", "\\\\")) end,
+		Reject = function(player, handler, reason)
+			print(string.format("[Validate] reject handler=%s reason=%s", tostring(handler), tostring(reason)))
+			return false
+		end,
+	}
+end
+
 -- Client addon registration is handled by AIO.AddAddon() in
 -- LootFilter_Client.lua (Eluna loads both files from the same
 -- directory; the client file self-registers via debug.getinfo).
@@ -21,10 +43,22 @@ if not LootFilter_ServerHandlers then
 end
 
 -- ============================================================
--- Constants
+-- Constants & Whitelists
 -- ============================================================
 
 local MAX_RULES = 30
+local MAX_COND_STR_LEN = 128
+local MAX_PRIORITY = 255
+local MAX_RULE_GROUP = 255
+
+-- Wert-Ranges der drei Enums (mussten vorher als <0/>N abgefragt werden;
+-- jetzt als Sets für klarere Whitelists). Müssen mit dem Client und
+-- LootFilter.h übereinstimmen.
+local COND_TYPES = Validate.ToSet({0, 1, 2, 3, 4, 5, 6, 7})
+	-- 0=Quality, 1=ItemLevel, 2=SellPrice, 3=ItemClass, 4=ItemSubclass,
+	-- 5=IsCursed, 6=ItemId, 7=NameContains
+local COND_OPS = Validate.ToSet({0, 1, 2}) -- =, >, <
+local ACTIONS = Validate.ToSet({0, 1, 2, 3}) -- Keep, Sell, Disenchant, Delete
 
 -- ============================================================
 -- Helper: send all rules + settings to a player's client UI
@@ -107,24 +141,35 @@ end
 LootFilter_ServerHandlers.AddRule = function(player, condType, condOp, condValue, condStr, action, priority, ruleGroup)
 	local guid = player:GetGUIDLow()
 
-	-- Validate inputs
-	condType = tonumber(condType) or 0
-	condOp = tonumber(condOp) or 0
-	condValue = tonumber(condValue) or 0
-	condStr = tostring(condStr or "")
-	action = tonumber(action) or 1
-	priority = tonumber(priority) or 100
-	ruleGroup = tonumber(ruleGroup) or 0
+	-- Whitelist-Validierung der Enum-Felder; Reject statt Default,
+	-- damit fehlerhafte Aufrufe nicht stillschweigend zu willkürlichen Regeln werden.
+	if not Validate.IsInWhitelist(condType, COND_TYPES) then
+		return Validate.Reject(player, "AddRule", "condType out of whitelist")
+	end
+	if not Validate.IsInWhitelist(condOp, COND_OPS) then
+		condOp = 0  -- "=" als sicherer Default für legacy-Clients
+	end
+	if not Validate.IsInWhitelist(action, ACTIONS) then
+		return Validate.Reject(player, "AddRule", "action out of whitelist")
+	end
 
-	if condType < 0 or condType > 7 then return end
-	if condOp < 0 or condOp > 2 then condOp = 0 end
-	if action < 0 or action > 3 then return end
-	if priority < 0 or priority > 255 then priority = 100 end
-	if ruleGroup < 0 then ruleGroup = 0 end
+	-- Numerische Felder
+	if not Validate.IsNonNegativeInt(condValue, 4294967295) then
+		return Validate.Reject(player, "AddRule", "condValue not a non-negative int")
+	end
+	if not Validate.IsIntInRange(priority, 0, MAX_PRIORITY) then
+		priority = 100
+	end
+	if not Validate.IsIntInRange(ruleGroup, 0, MAX_RULE_GROUP) then
+		ruleGroup = 0
+	end
 
-	-- Sanitize string (escape single quotes)
-	condStr = string.gsub(condStr, "'", "\\'")
-	if #condStr > 128 then condStr = string.sub(condStr, 1, 128) end
+	-- String-Validierung + SQL-Escape (MySQL-konform: '' statt \').
+	if condStr == nil then condStr = "" end
+	if not Validate.IsStringMaxLen(condStr, MAX_COND_STR_LEN) then
+		return Validate.Reject(player, "AddRule", "condStr too long")
+	end
+	condStr = Validate.SqlEscape(condStr)
 
 	-- Check rule count limit
 	local countQ = CharDBQuery(string.format(
@@ -172,8 +217,10 @@ end
 -- ============================================================
 
 LootFilter_ServerHandlers.DeleteRule = function(player, ruleId)
+	if not Validate.IsNonNegativeInt(ruleId, 4294967295) then
+		return Validate.Reject(player, "DeleteRule", "ruleId not a non-negative int")
+	end
 	local guid = player:GetGUIDLow()
-	ruleId = tonumber(ruleId) or 0
 
 	local checkQ = CharDBQuery(string.format(
 		"SELECT `ruleId` FROM `character_loot_filter` "..
@@ -197,8 +244,10 @@ end
 -- ============================================================
 
 LootFilter_ServerHandlers.ToggleRule = function(player, ruleId)
+	if not Validate.IsNonNegativeInt(ruleId, 4294967295) then
+		return Validate.Reject(player, "ToggleRule", "ruleId not a non-negative int")
+	end
 	local guid = player:GetGUIDLow()
-	ruleId = tonumber(ruleId) or 0
 
 	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter` SET `enabled` = IF(`enabled`=1, 0, 1) "..
@@ -228,11 +277,13 @@ end
 -- ============================================================
 
 LootFilter_ServerHandlers.UpdatePriority = function(player, ruleId, newPriority)
+	if not Validate.IsNonNegativeInt(ruleId, 4294967295) then
+		return Validate.Reject(player, "UpdatePriority", "ruleId not a non-negative int")
+	end
+	if not Validate.IsIntInRange(newPriority, 0, MAX_PRIORITY) then
+		newPriority = 100
+	end
 	local guid = player:GetGUIDLow()
-	ruleId = tonumber(ruleId) or 0
-	newPriority = tonumber(newPriority) or 100
-
-	if newPriority < 0 or newPriority > 255 then newPriority = 100 end
 
 	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter` SET `priority` = %d "..
@@ -247,15 +298,19 @@ end
 -- ============================================================
 
 LootFilter_ServerHandlers.UpdateRule = function(player, ruleId, newAction, newPriority, newGroup)
+	if not Validate.IsNonNegativeInt(ruleId, 4294967295) then
+		return Validate.Reject(player, "UpdateRule", "ruleId not a non-negative int")
+	end
+	if not Validate.IsInWhitelist(newAction, ACTIONS) then
+		newAction = 1
+	end
+	if not Validate.IsIntInRange(newPriority, 0, MAX_PRIORITY) then
+		newPriority = 100
+	end
+	if not Validate.IsIntInRange(newGroup, 0, MAX_RULE_GROUP) then
+		newGroup = 0
+	end
 	local guid = player:GetGUIDLow()
-	ruleId = tonumber(ruleId) or 0
-	newAction = tonumber(newAction) or 1
-	newPriority = tonumber(newPriority) or 100
-	newGroup = tonumber(newGroup) or 0
-
-	if newAction < 0 or newAction > 3 then newAction = 1 end
-	if newPriority < 0 or newPriority > 255 then newPriority = 100 end
-	if newGroup < 0 or newGroup > 255 then newGroup = 0 end
 
 	CharDBQuery(string.format(
 		"UPDATE `character_loot_filter` SET `action` = %d, `priority` = %d, `ruleGroup` = %d "..
