@@ -4,6 +4,7 @@
 
 ## 2026
 
+- 2026-05-01 — fix(security): whitelist enum args + MySQL-correct SQL escape ([68af457](https://github.com/Shoro2/mod-loot-filter/commit/68af4576a000054cc132fa4d549b8ffc7c89153f)) — `LootFilter_Server.lua` validiert via Dep_Validation: `condType`/`action`/`condOp` als Whitelist-Sets, `ruleId`/`condValue`/`priority`/`ruleGroup` als bounded Ints, `condStr` Length-Limit + `Validate.SqlEscape` (`''` statt `\'` für MySQL-NO_BACKSLASH_ESCAPES-Mode). Erledigt M4 aus `todo.md`.
 - 2026-03-26 — feat: comparison operators (=, >, <) for filter rules ([44322b5](https://github.com/Shoro2/mod-loot-filter/commit/44322b54f788d44459686cbeb05d2cd29d4f10ad)) — neue DB-Spalte `conditionOp` plus Migration für bestehende Regeln.
 - 2026-03-22 — fix: cursed detection, gold formatting, keep unsellable items ([19a497d](https://github.com/Shoro2/mod-loot-filter/commit/19a497d12ecff2bc9e04b6ab4cf86dae9058f281)) — Filter-Eval auf nächsten Tick verschoben (mod-paragon-itemgen muss zuerst Enchants applien); Money als g/s/c; SellPrice=0 keep; Non-disenchantable keep.
 - 2026-03-22 — feat: auto-deposit kept items + DE materials into Endless Storage ([a2a1887](https://github.com/Shoro2/mod-loot-filter/commit/a2a1887541df7725241852b60cb9bb7311ac8bb3)) — Trade Goods/Gems/Recipes landen via Keep-Action direkt in `custom_endless_storage`.
