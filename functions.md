@@ -1,12 +1,12 @@
-# Funktionen & Mechaniken — mod-loot-filter
+# Functions & mechanics — mod-loot-filter
 
-> Detaillierte Funktions- und Mechanik-Referenz. Inhalts-/Zweck-Doku siehe `CLAUDE.md`.
+> Detailed function and mechanics reference. For content/purpose docs see `CLAUDE.md`.
 
-## Modul-Loader
+## Module loader
 
 ### `Addmod_loot_filterScripts()`
-- **Datei**: `src/mod_loot_filter_loader.cpp`
-- **Wirkung**: registriert die `LootFilter`-Klasse (`PlayerScript` + `WorldScript` + `CommandScript`).
+- **File**: `src/mod_loot_filter_loader.cpp`
+- **Effect**: registers the `LootFilter` class (`PlayerScript` + `WorldScript` + `CommandScript`).
 
 ## Enums (`src/LootFilter.h`)
 
@@ -16,7 +16,7 @@ enum LootFilterCondition {
     ITEM_SUBCLASS = 4, IS_CURSED = 5, ITEM_ID = 6, NAME_CONTAINS = 7
 };
 
-enum LootFilterOp {  // nur für numerische Conditions
+enum LootFilterOp {  // only for numeric conditions
     OP_EQUALS = 0, OP_GREATER = 1, OP_LESS = 2
 };
 
@@ -25,78 +25,78 @@ enum LootFilterAction {
 };
 ```
 
-## Hook-Punkte (PlayerScript)
+## Hook points (PlayerScript)
 
-| Hook | Verhalten |
+| Hook | Behavior |
 |------|-----------|
-| `OnPlayerLogin` | `LoadRulesForPlayer(guid)` + `LoadSettingsForPlayer(guid)` → in In-Memory-Cache |
-| `OnPlayerLootItem` | **Deferred** auf nächsten Server-Tick (siehe Hinweis unten), dann `EvaluateFilter(player, item)` |
-| `OnPlayerLogout` | Stats persistieren, Cache invalidieren |
+| `OnPlayerLogin` | `LoadRulesForPlayer(guid)` + `LoadSettingsForPlayer(guid)` → into in-memory cache |
+| `OnPlayerLootItem` | **Deferred** to the next server tick (see note below), then `EvaluateFilter(player, item)` |
+| `OnPlayerLogout` | Persist stats, invalidate cache |
 
 `WorldScript`:
-| Hook | Verhalten |
+| Hook | Behavior |
 |------|-----------|
-| `OnAfterConfigLoad` | alle 6 Konfig-Keys via `sConfigMgr->GetOption<>()` lesen |
+| `OnAfterConfigLoad` | read all 6 config keys via `sConfigMgr->GetOption<>()` |
 
-> **Wichtig — Deferred Eval**: Die Filter-Auswertung erfolgt **nicht** synchron im `OnPlayerLootItem`. Der Hook fügt das Item nur in eine Pending-Queue ein; die eigentliche Evaluation läuft im nächsten Server-Tick. Grund: mod-paragon-itemgen modifiziert Slot 11 ebenfalls im `OnPlayerLootItem`-Hook — würde der Filter sofort prüfen, wäre die `IsParagonCursedItem`-Erkennung racy.
+> **Important — deferred eval**: The filter evaluation does **not** happen synchronously in `OnPlayerLootItem`. The hook only inserts the item into a pending queue; the actual evaluation runs on the next server tick. Reason: mod-paragon-itemgen also modifies slot 11 in the `OnPlayerLootItem` hook — if the filter checked immediately, the `IsParagonCursedItem` detection would be racy.
 
-## Kern-Funktionen (`src/LootFilter.cpp`)
+## Core functions (`src/LootFilter.cpp`)
 
-| Funktion | Zweck |
+| Function | Purpose |
 |----------|-------|
-| `EvaluateFilter(Player*, Item*)` | iteriert Regeln in Prioritätsreihenfolge, gibt **erste** matchende Action zurück |
-| `MatchesCondition(rule, item, proto)` | Eval einer einzelnen Regel: schaltet via `conditionType` auf passendes Feld, vergleicht via `conditionOp` |
-| `ApplyAction(player, item, action, rule)` | Disptcht auf `SellItem` / `DisenchantItem` / `DeleteItem` / Keep+Storage-Deposit |
-| `SellItem(Player*, Item*)` | erhöht `totalSold` um `SellPrice * count`, Item destroy, Money formatiert (`Xg Ys Zc`) |
-| `DisenchantItem(Player*, Item*)` | rollt `LootTemplates_Disenchant` (kein Skill-Check), Materials in Inventar oder (falls eligible) Endless Storage; Fallback bei Non-disenchantable: Keep |
-| `DeleteItem(Player*, Item*)` | hartes destroy ohne Reward |
-| `IsParagonCursedItem(Item*)` | prüft Slot 11 auf Enchant-ID `920001` oder Range `950001`-`950099` |
-| `LoadRulesForPlayer(guid)` | Prepared-SELECT auf `character_loot_filter` ORDER BY priority |
-| `LoadSettingsForPlayer(guid)` | Prepared-SELECT auf `character_loot_filter_settings` |
-| `IsStorageEligible(item)` | true wenn Class 7 (TradeGoods stackable) oder Class 3 (Gem stackable) oder Class 9 (Recipe) |
+| `EvaluateFilter(Player*, Item*)` | iterates rules in priority order, returns the **first** matching action |
+| `MatchesCondition(rule, item, proto)` | eval of a single rule: switches on `conditionType` to the matching field, compares via `conditionOp` |
+| `ApplyAction(player, item, action, rule)` | dispatches to `SellItem` / `DisenchantItem` / `DeleteItem` / Keep+storage deposit |
+| `SellItem(Player*, Item*)` | increments `totalSold` by `SellPrice * count`, item destroy, money formatted (`Xg Ys Zc`) |
+| `DisenchantItem(Player*, Item*)` | rolls `LootTemplates_Disenchant` (no skill check), materials in inventory or (if eligible) Endless Storage; fallback for non-disenchantable: keep |
+| `DeleteItem(Player*, Item*)` | hard destroy without reward |
+| `IsParagonCursedItem(Item*)` | checks slot 11 for enchant ID `920001` or range `950001`-`950099` |
+| `LoadRulesForPlayer(guid)` | prepared SELECT on `character_loot_filter` ORDER BY priority |
+| `LoadSettingsForPlayer(guid)` | prepared SELECT on `character_loot_filter_settings` |
+| `IsStorageEligible(item)` | true if class 7 (TradeGoods stackable) or class 3 (gem stackable) or class 9 (recipe) |
 
-### Action-Special-Cases
+### Action special cases
 
-- **`SellPrice == 0`** → Action wird zu Keep umgewandelt (Items lassen sich nicht für 0 Kupfer verkaufen).
-- **Item nicht disenchantable** → Disenchant-Action fällt auf Keep zurück (vorher: auf Sell — wurde 2026-03-22 korrigiert).
-- **Keep + Item ist storage-eligible** → wird in `custom_endless_storage` deponiert statt im Inventar gehalten. Log-Eintrag "Stored [item] x N in Storage".
+- **`SellPrice == 0`** → action is converted to Keep (items cannot be sold for 0 copper).
+- **Item not disenchantable** → Disenchant action falls back to Keep (previously: to Sell — corrected on 2026-03-22).
+- **Keep + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage".
 
-## Prioritäts-Eval
-
-```
-alle Regeln (standalone + group) gemeinsam in priority ASC sortiert
-  └─ pro Regel: MatchesCondition?
-     └─ ja → return action  (first match wins)
-```
-
-Regelung seit 2026-03-22 (Commit `8818661`): vorher hatten standalone-Regeln immer Vorrang vor Group-Regeln, was die Priority untergrub.
-
-## Money-Format
+## Priority eval
 
 ```
-Eingabe: 12345 Kupfer
-Ausgabe: "1g 23s 45c"
+all rules (standalone + group) sorted together in priority ASC
+  └─ per rule: MatchesCondition?
+     └─ yes → return action  (first match wins)
 ```
 
-Implementiert in einer kleinen Helper-Funktion (siehe `LootFilter.cpp`). 0-Anteile werden weggelassen ("1g" statt "1g 0s 0c").
+Behavior since 2026-03-22 (commit `8818661`): previously standalone rules always took precedence over group rules, which undermined the priority.
 
-## Chat-Commands (CommandScript)
+## Money format
 
 ```
-.lootfilter reload    → Rules + Settings aus DB neu laden (in-memory cache)
-.lootfilter toggle    → filterEnabled bit kippen, persistieren
-.lootfilter stats     → totalSold (g/s/c), totalDisenchanted, totalDeleted ausgeben
+Input: 12345 copper
+Output: "1g 23s 45c"
 ```
 
-Alle `SEC_PLAYER`. Kein Cooldown.
+Implemented in a small helper function (see `LootFilter.cpp`). Zero parts are dropped ("1g" instead of "1g 0s 0c").
 
-## AIO-Handler (Lua)
+## Chat commands (CommandScript)
 
-Server-Side (Client → Server, in `LootFilter_Server.lua`):
+```
+.lootfilter reload    → reload rules + settings from DB (in-memory cache)
+.lootfilter toggle    → flip filterEnabled bit, persist
+.lootfilter stats     → output totalSold (g/s/c), totalDisenchanted, totalDeleted
+```
 
-| Handler | Args | Wirkung |
+All `SEC_PLAYER`. No cooldown.
+
+## AIO handlers (Lua)
+
+Server side (client → server, in `LootFilter_Server.lua`):
+
+| Handler | Args | Effect |
 |---------|------|---------|
-| `RequestData` | — | sendet Rules + Settings an Client |
+| `RequestData` | — | sends rules + settings to client |
 | `AddRule` | conditionType, conditionOp, conditionValue, conditionStr, action, priority | INSERT `character_loot_filter`, in-memory cache update |
 | `DeleteRule` | ruleId | DELETE + cache update |
 | `ToggleRule` | ruleId | UPDATE enabled |
@@ -104,30 +104,30 @@ Server-Side (Client → Server, in `LootFilter_Server.lua`):
 | `UpdatePriority` | ruleId, newPriority | UPDATE + re-sort |
 | `DeleteAllRules` | — | DELETE WHERE characterId = ? |
 
-Client-Side (Server → Client, in `LootFilter_Client.lua`):
+Client side (server → client, in `LootFilter_Client.lua`):
 
-| Handler | Args | Wirkung |
+| Handler | Args | Effect |
 |---------|------|---------|
-| `ReceiveSettings` | filterEnabled, totalSold, totalDisenchanted, totalDeleted | UI-Update |
-| `ClearRules` | — | client-side rule cache leeren |
-| `ReceiveRule` | ruleId, conditionType, op, value, str, action, priority, enabled | einzelne Regel an Client |
-| `RefreshUI` | — | UI-Redraw triggern |
+| `ReceiveSettings` | filterEnabled, totalSold, totalDisenchanted, totalDeleted | UI update |
+| `ClearRules` | — | clear client-side rule cache |
+| `ReceiveRule` | ruleId, conditionType, op, value, str, action, priority, enabled | single rule to client |
+| `RefreshUI` | — | trigger UI redraw |
 
-## Konfigurations-Optionen
+## Configuration options
 
-| Schlüssel | Default | Wirkung |
+| Key | Default | Effect |
 |-----------|---------|---------|
-| `LootFilter.Enable` | `true` | Master-Toggle |
-| `LootFilter.AllowSell` | `true` | Sell-Action erlauben |
-| `LootFilter.AllowDisenchant` | `true` | DE-Action erlauben |
-| `LootFilter.AllowDelete` | `true` | Delete-Action erlauben |
-| `LootFilter.LogActions` | `true` | Sysmessage pro Filter-Action |
-| `LootFilter.MaxRulesPerChar` | `30` | Limit für `AddRule` |
+| `LootFilter.Enable` | `true` | master toggle |
+| `LootFilter.AllowSell` | `true` | allow Sell action |
+| `LootFilter.AllowDisenchant` | `true` | allow DE action |
+| `LootFilter.AllowDelete` | `true` | allow Delete action |
+| `LootFilter.LogActions` | `true` | sysmessage per filter action |
+| `LootFilter.MaxRulesPerChar` | `30` | limit for `AddRule` |
 
-Bei `false` für eine `Allow*`-Option fällt die jeweilige Aktion auf Keep zurück (mit Log).
+If an `Allow*` option is set to `false`, the corresponding action falls back to Keep (with log).
 
-## Bekannte Einschränkungen
+## Known limitations
 
-- **Eluna-Lua DB-Calls** verwenden String-Concatenation (kein PreparedStatement-Equivalent in Eluna).
-- **Cursed-Detection** klappt nur, wenn mod-paragon-itemgen den Slot-11-Eintrag bereits gesetzt hat — daher der deferred-Eval.
-- **`LootTemplates_Disenchant`** ist global — keine Server-Konfig pro Item-Quality möglich, alles vanilla DE-Loot.
+- **Eluna Lua DB calls** use string concatenation (no PreparedStatement equivalent in Eluna).
+- **Cursed detection** only works if mod-paragon-itemgen has already set the slot 11 entry — hence the deferred eval.
+- **`LootTemplates_Disenchant`** is global — no server config per item quality possible, everything is vanilla DE loot.
