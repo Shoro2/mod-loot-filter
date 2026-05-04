@@ -1,71 +1,71 @@
 # mod-loot-filter
 
-> Lies zuerst [`INDEX.md`](./INDEX.md). Mechanik & Hooks: [`functions.md`](./functions.md). Folder-Layout: [`data_structure.md`](./data_structure.md). Offenes: [`todo.md`](./todo.md). Commit-Spur: [`log.md`](./log.md).
+> Read [`INDEX.md`](./INDEX.md) first. Mechanics & hooks: [`functions.md`](./functions.md). Folder layout: [`data_structure.md`](./data_structure.md). Open items: [`todo.md`](./todo.md). Commit trail: [`log.md`](./log.md).
 
-## Was ist das Modul?
+## What is this module?
 
-AzerothCore-Modul für **WoW 3.3.5a (WotLK)**. Bietet ein regelbasiertes **automatisches Item-Filterungssystem** für gelootete Gegenstände: der Spieler legt eigene Filterregeln per AIO-UI an, und passende Items werden anschließend automatisch verkauft (Vendor), entzaubert oder gelöscht. Eine Whitelist-Aktion ("Keep") erlaubt das Schützen wertvoller Items vor breiteren Regeln.
+AzerothCore module for **WoW 3.3.5a (WotLK)**. Provides a rule-based **automatic item filtering system** for looted items: the player creates their own filter rules via the AIO UI, and matching items are automatically sold (vendor), disenchanted, or deleted afterwards. A whitelist action ("Keep") allows protecting valuable items from broader rules.
 
-Per-Character — jeder Charakter hat seine eigenen Regeln, gespeichert in `acore_characters`.
+Per-character — every character has its own rules, stored in `acore_characters`.
 
-## Rolle im Gesamtprojekt
+## Role in the overall project
 
 ```
-Loot-Quelle (manuell, mod-auto-loot)
+Loot source (manual, mod-auto-loot)
         │
         ▼ sScriptMgr->OnPlayerLootItem()
         │
    ┌────┴────────────────────────────────────────┐
    ▼                                              ▼
-mod-paragon-itemgen  (Bonus-Stats anwenden)   mod-loot-filter  (filtern: Keep / Sell / DE / Delete)
+mod-paragon-itemgen  (apply bonus stats)      mod-loot-filter  (filter: Keep / Sell / DE / Delete)
 ```
 
-Das Modul hängt am gemeinsamen `OnPlayerLootItem`-Hook. Es funktioniert sowohl mit mod-auto-loot (AOE-Loot im Radius) als auch mit manuellem Looting. Es erwartet **kein** spezielles Hook-Pattern — die Regelauswertung läuft pro Item, das im Inventar landet.
+The module hangs on the shared `OnPlayerLootItem` hook. It works both with mod-auto-loot (AOE loot in radius) and with manual looting. It expects **no** special hook pattern — rule evaluation runs per item that ends up in the inventory.
 
-## Custom-Daten
+## Custom data
 
-| Typ | Eintrag | Bemerkung |
+| Type | Entry | Note |
 |-----|--------|-----------|
-| **DB-Tabellen (acore_characters)** | `character_loot_filter` | Per-Char Regeln (Bedingung, Operator, Wert, Aktion, Priorität, enabled) |
-| | `character_loot_filter_settings` | Master-Toggle + Statistik (totalSold, totalDisenchanted, totalDeleted) |
-| **DBC-Patches** | keine | |
-| **Custom-Spells** | keine | |
-| **Custom-Items/NPCs** | keine | |
-| **AIO-Handler-Namen** | `LF` (Server) / `LF_Client` (Client) | Details: [`functions.md`](./functions.md#aio-handler) |
-| **Slash-Commands** | `/lf`, `/lootfilter` | öffnet die Filter-UI |
-| **GM-Commands** | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats` | alle `SEC_PLAYER` |
+| **DB tables (acore_characters)** | `character_loot_filter` | Per-character rules (condition, operator, value, action, priority, enabled) |
+| | `character_loot_filter_settings` | Master toggle + statistics (totalSold, totalDisenchanted, totalDeleted) |
+| **DBC patches** | none | |
+| **Custom spells** | none | |
+| **Custom items/NPCs** | none | |
+| **AIO handler names** | `LF` (server) / `LF_Client` (client) | Details: [`functions.md`](./functions.md#aio-handler) |
+| **Slash commands** | `/lf`, `/lootfilter` | opens the filter UI |
+| **GM commands** | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats` | all `SEC_PLAYER` |
 
-## Filter-Mechanik (Top-Level)
+## Filter mechanics (top level)
 
-| Bedingungstyp | Operatoren |
+| Condition type | Operators |
 |---------------|------------|
 | Quality, Item Level, Sell Price, Item Class, Item Subclass, Item ID | `=`, `>`, `<` |
-| Cursed Status | bool |
-| Name Contains | substring |
+| Cursed status | bool |
+| Name contains | substring |
 
-Aktionen: **Keep** (Whitelist) / **Sell** (Vendor) / **Disenchant** (mit Skill-Fallback auf Sell) / **Delete**. Regeln laufen in Prioritäts-Reihenfolge — niedrigster Wert zuerst, **erster Match gewinnt**.
+Actions: **Keep** (whitelist) / **Sell** (vendor) / **Disenchant** (with skill fallback to Sell) / **Delete**. Rules run in priority order — lowest value first, **first match wins**.
 
-Cursed-Erkennung: Modul liest Slot-11-Enchantment auf jedem Item. Werte `920001` ("Cursed"-Marker) und Range `950001-950099` (Passive-Spells) werden als "cursed" gewertet. → Abhängigkeit zu mod-paragon-itemgen für die Slot-11-Convention.
+Cursed detection: the module reads slot 11 enchantment on every item. Values `920001` ("Cursed" marker) and the range `950001-950099` (passive spells) are treated as "cursed". → dependency on mod-paragon-itemgen for the slot 11 convention.
 
-## Konfiguration (Top-Level)
+## Configuration (top level)
 
 `conf/loot_filter.conf.dist`:
 
-- `LootFilter.Enable` (Master-Toggle)
+- `LootFilter.Enable` (master toggle)
 - `LootFilter.AllowSell`, `AllowDisenchant`, `AllowDelete`
 - `LootFilter.LogActions`
 - `LootFilter.MaxRulesPerChar = 30`
 
-Details und Defaults: [`functions.md`](./functions.md#konfiguration).
+Details and defaults: [`functions.md`](./functions.md#configuration).
 
-## Was das Modul **nicht** tut
+## What this module does **not** do
 
-- **kein** AH-/Mail-Filter — wirkt nur auf `OnPlayerLootItem`-Events
-- **kein** Auto-Use (z.B. Quest-Items automatisch öffnen)
-- **kein** Equipment-Auto-Equip
-- **kein** Bulk-Import / -Export von Regelsets — Regeln müssen per UI angelegt werden (siehe [`todo.md`](./todo.md))
-- **keine** Server-Defaults — neue Charaktere starten ohne Regeln (siehe [`todo.md`](./todo.md))
+- **no** AH/mail filter — only acts on `OnPlayerLootItem` events
+- **no** auto-use (e.g. quest items opened automatically)
+- **no** equipment auto-equip
+- **no** bulk import / export of rule sets — rules must be created via the UI (see [`todo.md`](./todo.md))
+- **no** server defaults — new characters start without rules (see [`todo.md`](./todo.md))
 
-## Lizenz
+## License
 
 GPL v2.
