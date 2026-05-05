@@ -1,17 +1,17 @@
 # TODOs — mod-loot-filter
 
-> Offene Aufgaben für dieses Modul. Erledigte TODOs in `log.md` festhalten und hier entfernen.
+> Open tasks for this module. Record completed TODOs in `log.md` and remove them here.
 
-## Funktionale Verbesserungen
+## Functional improvements
 
-- [ ] **(niedrig)** Per-Item-Klassen-Konfiguration für `LootTemplates_Disenchant`: aktuell wird das globale Disenchant-Template verwendet. Wäre nett: optional pro Quality-Stufe einen Bonus-Faktor.
-- [ ] **(niedrig)** Bulk-Import / Export von Filter-Regeln (z.B. JSON-String per Slash-Command), damit Spieler Regelsets teilen können.
-- [ ] **(niedrig)** Regel-Templates als Server-Defaults: aktuell sind nur die Preset-Buttons in der UI verdrahtet. Server-seitige Default-Regeln pro neuem Charakter wären sinnvoll.
+- [ ] **(low)** Per-item-class configuration for `LootTemplates_Disenchant`: currently the global Disenchant template is used. Would be nice: optional per-quality bonus factor.
+- [ ] **(low)** Bulk import / export of filter rules (e.g. JSON string via slash command), so players can share rule sets.
+- [ ] **(low)** Rule templates as server defaults: only the preset buttons are wired up in the UI right now. Server-side default rules per new character would be useful.
 
-## Doku
+## Docs
 
-- [ ] keine offenen Punkte.
+- [ ] no open items.
 
-## Konvention
+## Convention
 
-Erledigte Items NICHT durchstreichen — entfernen und in `log.md` dokumentieren.
+Do NOT cross out completed items — remove them and document them in `log.md`.
