@@ -254,7 +254,7 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
     uint32 guid = player->GetGUID().GetCounter();
     ItemTemplate const* proto = item->GetTemplate();
     if (!proto)
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
     std::lock_guard<std::mutex> lock(s_filterMutex);
 
@@ -268,9 +268,11 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
         || !settingsIt->second.filterEnabled)
         return FILTER_ACTION_NONE;
 
+    // No rules configured → nothing to filter. Leave the item in the
+    // inventory untouched: without a rule there is no auto-storage.
     auto rulesIt = s_filterRules.find(guid);
     if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
     // Rules are sorted by priority ASC (lower = checked first).
     // ruleGroup=0 are standalone (OR), ruleGroup>0 are AND-combined.
@@ -353,7 +355,9 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
         }
     }
 
-    return FILTER_ACTION_KEEP;
+    // No rule matched → take no action. The item just stays in the
+    // inventory; auto-storage only happens via an explicit Keep rule.
+    return FILTER_ACTION_NONE;
 }
 
 // ============================================================

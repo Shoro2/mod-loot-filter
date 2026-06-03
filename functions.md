@@ -22,7 +22,7 @@ enum LootFilterOp {  // only for numeric conditions
 
 enum LootFilterAction {
     KEEP = 0, SELL = 1, DISENCHANT = 2, DELETE = 3,
-    NONE = 4  // filter disabled / no settings — take no action at all
+    NONE = 4  // inert: filter off, no rules, or no rule matched
 };
 ```
 
@@ -60,8 +60,8 @@ enum LootFilterAction {
 
 - **`SellPrice == 0`** → action is converted to Keep (items cannot be sold for 0 copper).
 - **Item not disenchantable** → Disenchant action falls back to Keep (previously: to Sell — corrected on 2026-03-22).
-- **Keep + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage". Applies only while the filter is **enabled** (see next point).
-- **Filter disabled** (per-character `filterEnabled = false`, shown as "Filter: OFF" in the UI) or **no settings row** → `EvaluateFilter` returns `NONE` and the module takes **no action whatsoever**: no sell / DE / delete and, crucially, **no** storage deposit. `KEEP` is *not* inert (it sweeps storage-eligible mats into Endless Storage), so the disabled state must return `NONE` rather than `KEEP`.
+- **Matching Keep rule + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage". Triggered **only by an explicit Keep rule that matches** (while the filter is enabled).
+- **No rule applies → `NONE` → item left untouched.** `EvaluateFilter` returns `NONE` (and the module does nothing — no sell / DE / delete and, crucially, **no** storage deposit) in every "no rule applies" case: filter disabled (`filterEnabled = false`, "Filter: OFF"), no settings row, **no rules configured**, or **no rule matched**. There is **no auto-storage without a matching rule**. `KEEP` is *not* inert (it sweeps storage-eligible mats into Endless Storage), so these fall-through cases must return `NONE`, never `KEEP`.
 
 ## Priority eval
 
@@ -69,6 +69,7 @@ enum LootFilterAction {
 all rules (standalone + group) sorted together in priority ASC
   └─ per rule: MatchesCondition?
      └─ yes → return action  (first match wins)
+  └─ no rule matched → return NONE (item left untouched, no storage)
 ```
 
 Behavior since 2026-03-22 (commit `8818661`): previously standalone rules always took precedence over group rules, which undermined the priority.
