@@ -4,6 +4,7 @@
 
 ## 2026
 
+- 2026-06-03 — fix: take no action when the per-character filter is disabled ([7161021](https://github.com/Shoro2/mod-loot-filter/commit/7161021e2203859da5661f5f82a90d309ea68143)) — "Filter: OFF" (`filterEnabled = false`) still routed items through `KEEP`, which auto-deposited storage-eligible mats (Trade Goods/Gems/Recipes/stackable Food, e.g. *Chunk of Boar Meat*) into `custom_endless_storage`. New `FILTER_ACTION_NONE` is returned for the disabled / no-settings case so the module is fully inert when off.
 - 2026-05-01 — fix(security): whitelist enum args + MySQL-correct SQL escape ([68af457](https://github.com/Shoro2/mod-loot-filter/commit/68af4576a000054cc132fa4d549b8ffc7c89153f)) — `LootFilter_Server.lua` validates via Dep_Validation: `condType`/`action`/`condOp` as whitelist sets, `ruleId`/`condValue`/`priority`/`ruleGroup` as bounded ints, `condStr` length limit + `Validate.SqlEscape` (`''` instead of `\'` for MySQL NO_BACKSLASH_ESCAPES mode). Resolves M4 from `todo.md`.
 - 2026-03-26 — feat: comparison operators (=, >, <) for filter rules ([44322b5](https://github.com/Shoro2/mod-loot-filter/commit/44322b54f788d44459686cbeb05d2cd29d4f10ad)) — new DB column `conditionOp` plus migration for existing rules.
 - 2026-03-22 — fix: cursed detection, gold formatting, keep unsellable items ([19a497d](https://github.com/Shoro2/mod-loot-filter/commit/19a497d12ecff2bc9e04b6ab4cf86dae9058f281)) — filter eval deferred to next tick (mod-paragon-itemgen must apply enchants first); money as g/s/c; SellPrice=0 keep; non-disenchantable keep.
