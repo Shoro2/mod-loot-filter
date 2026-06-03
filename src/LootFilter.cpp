@@ -258,10 +258,15 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
 
     std::lock_guard<std::mutex> lock(s_filterMutex);
 
+    // Per-character master toggle ("Filter: OFF" in the UI). When the
+    // filter is disabled the module must be completely inert — no
+    // selling, no disenchanting, no deleting and, crucially, no
+    // auto-deposit of materials into Endless Storage. KEEP is NOT a
+    // no-op (it sweeps storage-eligible items), so return NONE here.
     auto settingsIt = s_filterSettings.find(guid);
     if (settingsIt == s_filterSettings.end()
         || !settingsIt->second.filterEnabled)
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
     auto rulesIt = s_filterRules.find(guid);
     if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
@@ -602,8 +607,9 @@ struct LootFilterEvent : public BasicEvent
             case FILTER_ACTION_DELETE:
                 DeleteItem(player, item);
                 break;
+            case FILTER_ACTION_NONE:
             default:
-                break;
+                break;  // filter disabled — take no action
         }
         return true;
     }
