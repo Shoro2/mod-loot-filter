@@ -21,7 +21,8 @@ enum LootFilterOp {  // only for numeric conditions
 };
 
 enum LootFilterAction {
-    KEEP = 0, SELL = 1, DISENCHANT = 2, DELETE = 3
+    KEEP = 0, SELL = 1, DISENCHANT = 2, DELETE = 3,
+    NONE = 4  // inert: filter off, no rules, or no rule matched
 };
 ```
 
@@ -53,13 +54,14 @@ enum LootFilterAction {
 | `IsParagonCursedItem(Item*)` | checks slot 11 for enchant ID `920001` or range `950001`-`950099` |
 | `LoadRulesForPlayer(guid)` | prepared SELECT on `character_loot_filter` ORDER BY priority |
 | `LoadSettingsForPlayer(guid)` | prepared SELECT on `character_loot_filter_settings` |
-| `IsStorageEligible(item)` | true if class 7 (TradeGoods stackable) or class 3 (gem stackable) or class 9 (recipe) |
+| `IsStorageEligible(item)` | true if class 7 (TradeGoods stackable), class 3 (gem stackable), class 9 (recipe), or class 0 / subclass 5 (Food & Drink, stackable — e.g. *Chunk of Boar Meat*) |
 
 ### Action special cases
 
 - **`SellPrice == 0`** → action is converted to Keep (items cannot be sold for 0 copper).
 - **Item not disenchantable** → Disenchant action falls back to Keep (previously: to Sell — corrected on 2026-03-22).
-- **Keep + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage".
+- **Matching Keep rule + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage". Triggered **only by an explicit Keep rule that matches** (while the filter is enabled).
+- **No rule applies → `NONE` → item left untouched.** `EvaluateFilter` returns `NONE` (and the module does nothing — no sell / DE / delete and, crucially, **no** storage deposit) in every "no rule applies" case: filter disabled (`filterEnabled = false`, "Filter: OFF"), no settings row, **no rules configured**, or **no rule matched**. There is **no auto-storage without a matching rule**. `KEEP` is *not* inert (it sweeps storage-eligible mats into Endless Storage), so these fall-through cases must return `NONE`, never `KEEP`.
 
 ## Priority eval
 
@@ -67,6 +69,7 @@ enum LootFilterAction {
 all rules (standalone + group) sorted together in priority ASC
   └─ per rule: MatchesCondition?
      └─ yes → return action  (first match wins)
+  └─ no rule matched → return NONE (item left untouched, no storage)
 ```
 
 Behavior since 2026-03-22 (commit `8818661`): previously standalone rules always took precedence over group rules, which undermined the priority.

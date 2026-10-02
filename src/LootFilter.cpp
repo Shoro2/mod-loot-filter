@@ -254,18 +254,25 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
     uint32 guid = player->GetGUID().GetCounter();
     ItemTemplate const* proto = item->GetTemplate();
     if (!proto)
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
     std::lock_guard<std::mutex> lock(s_filterMutex);
 
+    // Per-character master toggle ("Filter: OFF" in the UI). When the
+    // filter is disabled the module must be completely inert — no
+    // selling, no disenchanting, no deleting and, crucially, no
+    // auto-deposit of materials into Endless Storage. KEEP is NOT a
+    // no-op (it sweeps storage-eligible items), so return NONE here.
     auto settingsIt = s_filterSettings.find(guid);
     if (settingsIt == s_filterSettings.end()
         || !settingsIt->second.filterEnabled)
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
+    // No rules configured → nothing to filter. Leave the item in the
+    // inventory untouched: without a rule there is no auto-storage.
     auto rulesIt = s_filterRules.find(guid);
     if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
-        return FILTER_ACTION_KEEP;
+        return FILTER_ACTION_NONE;
 
     // Rules are sorted by priority ASC (lower = checked first).
     // ruleGroup=0 are standalone (OR), ruleGroup>0 are AND-combined.
@@ -348,7 +355,9 @@ static LootFilterAction EvaluateFilter(Player* player, Item* item)
         }
     }
 
-    return FILTER_ACTION_KEEP;
+    // No rule matched → take no action. The item just stays in the
+    // inventory; auto-storage only happens via an explicit Keep rule.
+    return FILTER_ACTION_NONE;
 }
 
 // ============================================================
@@ -602,8 +611,9 @@ struct LootFilterEvent : public BasicEvent
             case FILTER_ACTION_DELETE:
                 DeleteItem(player, item);
                 break;
+            case FILTER_ACTION_NONE:
             default:
-                break;
+                break;  // filter disabled — take no action
         }
         return true;
     }

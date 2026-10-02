@@ -21,10 +21,11 @@
 // ============================================================
 enum LootFilterAction : uint8
 {
-    FILTER_ACTION_KEEP          = 0,  // do nothing (whitelist)
+    FILTER_ACTION_KEEP          = 0,  // whitelist; mats go to storage
     FILTER_ACTION_SELL          = 1,  // auto-vendor for gold
     FILTER_ACTION_DISENCHANT    = 2,  // disenchant (if player has skill)
     FILTER_ACTION_DELETE        = 3,  // destroy immediately
+    FILTER_ACTION_NONE          = 4,  // filter inactive - take no action
     FILTER_ACTION_MAX
 };
 
