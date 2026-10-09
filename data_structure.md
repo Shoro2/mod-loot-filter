@@ -9,60 +9,57 @@ mod-loot-filter/
 ├── conf/
 │   ├── conf.sh.dist                       # Build: SQL path registration for auto-update
 │   └── loot_filter.conf.dist              # Module configuration (template)
-├── data/sql/
-│   └── db-characters/
-│       └── loot_filter_tables.sql         # Schema: character_loot_filter + ..._settings
-├── Loot_Filter_LUA/
-│   ├── LootFilter_Client.lua              # AIO client UI (frame, lists, form, presets)
-│   └── LootFilter_Server.lua              # AIO server logic: handlers, DB calls
+├── data/sql/db-characters/
+│   └── loot_filter_tables.sql             # Schema: rule, condition, settings (idempotent)
+├── docs/superpowers/
+│   ├── specs/2026-10-09-loot-filter-ui-rework-design.md   # approved design of the rework
+│   └── plans/2026-10-09-loot-filter-ui-rework.md          # its implementation plan
+├── lua_scripts/                           # deployed to <server>/lua_scripts/LootFilter/
+│   ├── LootFilter_Client.lua              # the window, shipped to the client by AIO
+│   └── LootFilter_Server.lua              # empty stub (overwrites the old AIO handlers)
 ├── src/
-│   ├── LootFilter.h                       # Header: enums (Condition, Op, Action), constants
-│   ├── LootFilter.cpp                     # Core: eval logic, Sell/DE/Delete, hooks, commands
-│   └── mod_loot_filter_loader.cpp         # Loader: Addmod_loot_filterScripts()
+│   ├── LootFilter.h                       # AddLootFilterScripts()
+│   ├── LootFilter.cpp                     # core glue: cache, hooks, actions, messages, commands
+│   ├── LootFilterRules.h                  # pure rule logic (no core includes besides Define.h)
+│   └── mod_loot_filter_loader.cpp         # Addmod_loot_filterScripts()
+├── tests/
+│   ├── build_offline.cmd                  # builds + runs rules_test and client_test (writes build/)
+│   ├── rules_test.cpp                     # LootFilterRules.h: 207 checks
+│   ├── client_test.lua                    # the window against a mocked FrameXML API: 100 checks
+│   ├── schema_test.ps1                    # the SQL twice on a scratch schema (workbench MySQL)
+│   └── loot_filter.tbs                    # mod-fl-testbots scenario: rules, loot, actions (T1)
 ├── include.sh                             # Build integration (registers SQL paths)
-├── pull_request_template.md               # GitHub PR template (if present)
-├── CLAUDE.md                              # Detailed content doc
-├── README.md                              # GitHub readme (short)
-├── log.md                                 # Commit log (modular)
-├── data_structure.md                      # This file
-└── functions.md                           # Mechanics and function reference
+├── CLAUDE.md, INDEX.md, README.md, data_structure.md, functions.md, log.md, todo.md
+└── .gitignore                             # build/
 ```
+
+`src/` is the only folder AzerothCore compiles (`GetPathToModuleSource` → `<module>/src`), so `tests/`
+never reaches the worldserver. `LootFilterRules.h` is header-only: no CMake re-configure is needed.
 
 ## File purposes
 
 | File | Purpose |
 |-------|-------|
+| `src/LootFilterRules.h` | `Condition`, `Rule`, `ItemFacts`, `Verdict`; `Matches`, `Evaluate`; `ValidCondition`, `ValidRule`; codec (`EncodeRule`, `DecodeRule`, …); ordering (`Insert`, `Move`, `Remove`); bag addressing; `MigrateCharacter` |
+| `src/LootFilter.cpp` | `WorldScript` (config, startup migration, rule-id counter), `PlayerScript` (login/logout cache, loot hook, addon-message intake, character deletion), `CommandScript` (`.lootfilter`) |
+| `lua_scripts/LootFilter_Client.lua` | window: Rules tab + editor, Test tab, Log tab, minimap button, slash commands; global `LootFilterUI` (model + functions) and `LootFilter_Toggle()` |
+| `data/sql/db-characters/loot_filter_tables.sql` | creates the three tables; adds `chatMode`/`totalStored` and widens `totalSold` on an old settings table |
 | `conf/loot_filter.conf.dist` | `LootFilter.Enable`, `AllowSell`, `AllowDisenchant`, `AllowDelete`, `LogActions`, `MaxRulesPerChar` |
-| `conf/conf.sh.dist` | sourced by AzerothCore during auto-update, lists SQL paths |
-| `data/sql/db-characters/loot_filter_tables.sql` | Schema + migration for the `conditionOp` column |
-| `Loot_Filter_LUA/LootFilter_Server.lua` | Eluna script, registers server handlers (`AddRule`, `DeleteRule`, `ToggleRule`, `ToggleFilter`, `UpdatePriority`, `DeleteAllRules`, `RequestData`) |
-| `Loot_Filter_LUA/LootFilter_Client.lua` | WoW frame code (sent to the client via AIO): rule list, add form, preset buttons, minimap button, stats display |
-| `src/LootFilter.h` | Enums: `LootFilterCondition`, `LootFilterOp`, `LootFilterAction`. Constants. |
-| `src/LootFilter.cpp` | Hooks (`OnPlayerLogin`, `OnPlayerLootItem`, `OnPlayerLogout`, `OnAfterConfigLoad`), eval functions, action implementations |
-| `src/mod_loot_filter_loader.cpp` | `Addmod_loot_filterScripts()` — entry point |
-| `include.sh` | Build integration: source `conf/conf.sh.dist` |
-
-## Size notes (as of 2026-05-01)
-
-- All C++ files < 50 KB → individually readable
-- All Lua files < 30 KB → individually readable
-- SQL schema ~3 KB → individually readable
-
-## External dependencies
-
-- **azerothcore-wotlk** (core): `PlayerScript`, `WorldScript`, `CommandScript`, `Item`, `LootTemplates_Disenchant`, prepared statement API.
-- **AIO framework**: `lua_scripts/AIO.lua` + dependencies (from `share-public/AIO_Server/`).
-- **mod-paragon-itemgen** (optional): "Is Cursed" condition checks slot 11 enchantment IDs (920001 / 950001-950099).
-- **mod-endless-storage** (optional): the Keep action and DE action can deposit items directly into `custom_endless_storage` instead of into the inventory.
-- **mod-auto-loot** (optional): provides the `OnPlayerLootItem` events this module reacts to.
 
 ## DB tables (`acore_characters`)
 
 | Table | PK | Contents |
 |---------|----|--------|
-| `character_loot_filter` | `ruleId` (auto) | Rules per character |
-| `character_loot_filter_settings` | `characterId` | Master toggle + statistics |
+| `character_loot_filter_rule` | `ruleId` (assigned by the core) | characterId, position (1-based order), action, enabled |
+| `character_loot_filter_condition` | (`ruleId`, `slot`) | type, op, value, value2, text |
+| `character_loot_filter_settings` | `characterId` | filterEnabled, chatMode, totalSold, totalDisenchanted, totalDeleted, totalStored |
+| `character_loot_filter_legacy` | `ruleId` | the old one-condition rows, renamed after the migration; not read |
 
-## SQL convention for new migrations
+## External dependencies
 
-New schema changes go into `data/sql/db-characters/<description>.sql` with `IF NOT EXISTS`/idempotent statements. Auto-update detects new files automatically.
+- **azerothcore-wotlk** (core): ScriptMgr hooks, `Item`, `LootTemplates_Disenchant`, DBC stores (random
+  property/suffix names for item links).
+- **mod-ale + AIO** (`lua_scripts/AIO_Server/`): ship the window to the client.
+- **mod-paragon-itemgen** (optional): slot 11 enchant ids behind the "cursed" condition.
+- **mod-endless-storage** (optional): the `custom_endless_storage` table (To storage, disenchant mats).
+- **mod-auto-loot** (optional): AoE loot fires the same `OnPlayerLootItem`.

@@ -1,641 +1,1093 @@
 /*
- * mod-loot-filter — Automatic loot filtering for AzerothCore
+ * mod-loot-filter — core glue
  *
- * Hooks into OnPlayerLootItem to intercept items acquired by
- * mod-auto-loot and applies per-character filter rules.
+ * Owns the per-character rules (cache + the only writer of the tables),
+ * filters looted items one tick after the loot hook, executes the action,
+ * keeps statistics, and serves the window over addon messages: the client
+ * whispers itself "LFLT\t<payload>", the answers go out with prefix "LFLS".
+ * The rule model, codec and migration are in LootFilterRules.h.
  */
 
 #include "LootFilter.h"
-#include <algorithm>
+#include "LootFilterRules.h"
+#include "Bag.h"
 #include "Chat.h"
 #include "CommandScript.h"
 #include "Config.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "EventProcessor.h"
 #include "Item.h"
 #include "Log.h"
+#include "LootMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringFormat.h"
+#include "Timer.h"
+#include "World.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
-
-using namespace Acore::ChatCommands;
-
+#include <algorithm>
+#include <atomic>
+#include <map>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-// ============================================================
-// Config values
-// ============================================================
+using namespace Acore::ChatCommands;
+namespace LFR = LootFilterRules;
 
-static bool  conf_Enable            = true;
-static bool  conf_AllowSell         = true;
-static bool  conf_AllowDisenchant   = true;
-static bool  conf_AllowDelete       = true;
-static bool  conf_LogActions        = true;
-static uint32 conf_MaxRulesPerChar  = 30;
-
-// ============================================================
-// In-memory filter rule
-// ============================================================
-
-struct FilterRule
+namespace
 {
-    uint32 ruleId;
-    uint32 ruleGroup;       // 0 = standalone, >0 = AND group
-    uint8  conditionType;   // LootFilterCondition
-    uint8  conditionOp;     // LootFilterOp (0=equal, 1=greater, 2=less)
-    uint32 conditionValue;  // numeric value for the condition
-    std::string conditionStr; // string value (for name contains)
-    uint8  action;          // LootFilterAction
-    uint8  priority;        // lower = checked first
-    bool   enabled;
-};
+    // ------------------------------------------------------------
+    // Configuration
+    // ------------------------------------------------------------
 
-struct PlayerFilterSettings
-{
-    bool   filterEnabled;
-    uint32 totalSold;       // gold earned through auto-sell (copper)
-    uint32 totalDisenchanted;
-    uint32 totalDeleted;
-};
+    bool conf_Enable = true;
+    bool conf_AllowSell = true;
+    bool conf_AllowDisenchant = true;
+    bool conf_AllowDelete = true;
+    bool conf_LogActions = true;
+    uint32 conf_MaxRulesPerChar = 30;
 
-// ============================================================
-// In-memory cache: characterGuid -> rules
-// ============================================================
+    constexpr char const* PREFIX_IN = "LFLT\t";
+    constexpr std::size_t PREFIX_IN_LEN = 5;
+    constexpr char const* PREFIX_OUT = "LFLS";
+    constexpr char const* CHAT_TAG = "|cff888888[Loot Filter]|r ";
+    constexpr uint32 TOKEN_BURST = 20;
+    constexpr uint32 TOKEN_REFILL_MS = 100;
+    constexpr uint32 SCAN_INTERVAL_MS = 2000;
 
-static std::mutex s_filterMutex;
-static std::unordered_map<uint32, std::vector<FilterRule>> s_filterRules;
-static std::unordered_map<uint32, PlayerFilterSettings> s_filterSettings;
-
-// ============================================================
-// Database helpers
-// ============================================================
-
-static void LoadRulesForPlayer(uint32 guid)
-{
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT `ruleId`, `ruleGroup`, `conditionType`, `conditionOp`, "
-        "`conditionValue`, `conditionStr`, `action`, "
-        "`priority`, `enabled` "
-        "FROM `character_loot_filter` WHERE `characterId` = {} "
-        "ORDER BY `ruleGroup` ASC, `priority` ASC", guid);
-
-    std::vector<FilterRule> rules;
-    if (result)
+    uint8 AllowedMask()
     {
-        do
+        return LFR::AllowedMask(conf_AllowSell, conf_AllowDisenchant,
+            conf_AllowDelete);
+    }
+
+    // ------------------------------------------------------------
+    // Per-character state
+    // ------------------------------------------------------------
+
+    // What happened since the last flush: the statistics delta written to
+    // the DB and, in summary mode, the chat line.
+    struct FilterBatch
+    {
+        uint32 soldItems = 0;
+        uint64 money = 0;
+        uint32 disenchanted = 0;
+        uint32 stored = 0;
+        uint32 deleted = 0;
+        bool pending = false;
+
+        bool Empty() const
         {
-            Field* fields = result->Fetch();
-            FilterRule r;
-            r.ruleId        = fields[0].Get<uint32>();
-            r.ruleGroup     = fields[1].Get<uint32>();
-            r.conditionType = fields[2].Get<uint8>();
-            r.conditionOp   = fields[3].Get<uint8>();
-            r.conditionValue = fields[4].Get<uint32>();
-            r.conditionStr  = fields[5].Get<std::string>();
-            r.action        = fields[6].Get<uint8>();
-            r.priority      = fields[7].Get<uint8>();
-            r.enabled       = fields[8].Get<bool>();
-            rules.push_back(r);
-        } while (result->NextRow());
-    }
-
-    std::lock_guard<std::mutex> lock(s_filterMutex);
-    s_filterRules[guid] = std::move(rules);
-}
-
-static void LoadSettingsForPlayer(uint32 guid)
-{
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT `filterEnabled`, `totalSold`, `totalDisenchanted`, "
-        "`totalDeleted` FROM `character_loot_filter_settings` "
-        "WHERE `characterId` = {}", guid);
-
-    PlayerFilterSettings settings;
-    if (result)
-    {
-        Field* fields = result->Fetch();
-        settings.filterEnabled      = fields[0].Get<bool>();
-        settings.totalSold          = fields[1].Get<uint32>();
-        settings.totalDisenchanted  = fields[2].Get<uint32>();
-        settings.totalDeleted       = fields[3].Get<uint32>();
-    }
-    else
-    {
-        settings.filterEnabled = true;
-        settings.totalSold = 0;
-        settings.totalDisenchanted = 0;
-        settings.totalDeleted = 0;
-        CharacterDatabase.Execute(
-            "INSERT INTO `character_loot_filter_settings` "
-            "(`characterId`, `filterEnabled`, `totalSold`, "
-            "`totalDisenchanted`, `totalDeleted`) "
-            "VALUES ({}, 1, 0, 0, 0)", guid);
-    }
-
-    std::lock_guard<std::mutex> lock(s_filterMutex);
-    s_filterSettings[guid] = settings;
-}
-
-static void SaveStats(uint32 guid)
-{
-    std::lock_guard<std::mutex> lock(s_filterMutex);
-    auto const& it = s_filterSettings.find(guid);
-    if (it == s_filterSettings.end())
-        return;
-
-    auto const& s = it->second;
-    CharacterDatabase.Execute(
-        "UPDATE `character_loot_filter_settings` SET "
-        "`totalSold` = {}, `totalDisenchanted` = {}, "
-        "`totalDeleted` = {} WHERE `characterId` = {}",
-        s.totalSold, s.totalDisenchanted, s.totalDeleted, guid);
-}
-
-// ============================================================
-// Paragon cursed item detection (check slot 11 for enchant 920001)
-// ============================================================
-
-static bool IsParagonCursedItem(Item const* item)
-{
-    if (!item)
-        return false;
-
-    // Slot 11 = PROP_ENCHANTMENT_SLOT_4
-    uint32 enchId = item->GetEnchantmentId(
-        static_cast<EnchantmentSlot>(11));
-    // 920001 = Cursed marker, 950001-950099 = passive spell enchants
-    return enchId == 920001 || (enchId >= 950001 && enchId <= 950099);
-}
-
-// ============================================================
-// Filter matching logic
-// ============================================================
-
-static bool CompareNumeric(uint32 actual, uint8 op, uint32 expected)
-{
-    switch (op)
-    {
-        case FILTER_OP_EQUAL:   return actual == expected;
-        case FILTER_OP_GREATER: return actual > expected;
-        case FILTER_OP_LESS:    return actual < expected;
-        default:                return actual == expected;
-    }
-}
-
-static bool MatchesCondition(FilterRule const& rule,
-    Item const* item, ItemTemplate const* proto)
-{
-    switch (rule.conditionType)
-    {
-        case FILTER_COND_QUALITY:
-            return CompareNumeric(proto->Quality,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_ILVL:
-            return CompareNumeric(proto->ItemLevel,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_SELL_PRICE:
-            return CompareNumeric(proto->SellPrice,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_ITEM_CLASS:
-            return CompareNumeric(proto->Class,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_ITEM_SUBCLASS:
-            return CompareNumeric(proto->SubClass,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_IS_CURSED:
-            return IsParagonCursedItem(item)
-                   == (rule.conditionValue != 0);
-
-        case FILTER_COND_ITEM_ID:
-            return CompareNumeric(proto->ItemId,
-                rule.conditionOp, rule.conditionValue);
-
-        case FILTER_COND_NAME_CONTAINS:
-        {
-            if (rule.conditionStr.empty())
-                return false;
-            std::string name = proto->Name1;
-            std::string search = rule.conditionStr;
-            // case-insensitive search
-            std::transform(name.begin(), name.end(),
-                name.begin(), ::tolower);
-            std::transform(search.begin(), search.end(),
-                search.begin(), ::tolower);
-            return name.find(search) != std::string::npos;
+            return !soldItems && !disenchanted && !stored && !deleted;
         }
-
-        default:
-            return false;
-    }
-}
-
-static bool IsActionAllowed(uint8 action)
-{
-    if (action == FILTER_ACTION_SELL && !conf_AllowSell)
-        return false;
-    if (action == FILTER_ACTION_DISENCHANT && !conf_AllowDisenchant)
-        return false;
-    if (action == FILTER_ACTION_DELETE && !conf_AllowDelete)
-        return false;
-    return true;
-}
-
-static LootFilterAction EvaluateFilter(Player* player, Item* item)
-{
-    uint32 guid = player->GetGUID().GetCounter();
-    ItemTemplate const* proto = item->GetTemplate();
-    if (!proto)
-        return FILTER_ACTION_NONE;
-
-    std::lock_guard<std::mutex> lock(s_filterMutex);
-
-    // Per-character master toggle ("Filter: OFF" in the UI). When the
-    // filter is disabled the module must be completely inert — no
-    // selling, no disenchanting, no deleting and, crucially, no
-    // auto-deposit of materials into Endless Storage. KEEP is NOT a
-    // no-op (it sweeps storage-eligible items), so return NONE here.
-    auto settingsIt = s_filterSettings.find(guid);
-    if (settingsIt == s_filterSettings.end()
-        || !settingsIt->second.filterEnabled)
-        return FILTER_ACTION_NONE;
-
-    // No rules configured → nothing to filter. Leave the item in the
-    // inventory untouched: without a rule there is no auto-storage.
-    auto rulesIt = s_filterRules.find(guid);
-    if (rulesIt == s_filterRules.end() || rulesIt->second.empty())
-        return FILTER_ACTION_NONE;
-
-    // Rules are sorted by priority ASC (lower = checked first).
-    // ruleGroup=0 are standalone (OR), ruleGroup>0 are AND-combined.
-    // All rules are evaluated together in priority order — first match wins.
-
-    // Collect grouped and standalone rules
-    std::unordered_map<uint32, std::vector<FilterRule const*>> groups;
-    std::vector<FilterRule const*> standalone;
-
-    for (auto const& rule : rulesIt->second)
-    {
-        if (!rule.enabled)
-            continue;
-        if (rule.ruleGroup == 0)
-            standalone.push_back(&rule);
-        else
-            groups[rule.ruleGroup].push_back(&rule);
-    }
-
-    // Build a unified list of evaluable entries sorted by priority.
-    // Each entry is either a standalone rule or an AND-group.
-    struct EvalEntry
-    {
-        uint8 priority;
-        // For standalone: single rule pointer; for groups: nullptr
-        FilterRule const* standaloneRule;
-        // For groups: group ID to look up in the map
-        uint32 groupId;
     };
 
-    std::vector<EvalEntry> entries;
-    entries.reserve(standalone.size() + groups.size());
-
-    for (auto const* rule : standalone)
-        entries.push_back({ rule->priority, rule, 0 });
-
-    for (auto const& [groupId, groupRules] : groups)
+    struct FilterState
     {
-        if (groupRules.empty())
-            continue;
-        // Group priority is the lowest (first) priority in the group
-        uint8 groupPri = groupRules.front()->priority;
-        entries.push_back({ groupPri, nullptr, groupId });
+        bool filterEnabled = true;
+        uint8 chatMode = LFR::CHAT_SUMMARY;
+        uint64 totalSold = 0;
+        uint32 totalDisenchanted = 0;
+        uint32 totalDeleted = 0;
+        uint32 totalStored = 0;
+        std::vector<LFR::Rule> rules;   // evaluation order
+        uint32 tokens = TOKEN_BURST;
+        uint32 lastRefill = 0;
+        uint32 lastScan = 0;
+        bool scanned = false;
+        FilterBatch batch;
+    };
+
+    std::mutex s_mutex;
+    std::unordered_map<uint32, FilterState> s_states;
+    std::atomic<uint32> s_nextRuleId{ 1 };
+
+    // ------------------------------------------------------------
+    // Item helpers
+    // ------------------------------------------------------------
+
+    // Paragon cursed items carry enchant 920001 or a passive 950001-950099
+    // in slot 11 (PROP_ENCHANTMENT_SLOT_4), set by mod-paragon-itemgen.
+    bool IsParagonCursedItem(Item const* item)
+    {
+        uint32 const enchId =
+            item->GetEnchantmentId(static_cast<EnchantmentSlot>(11));
+        return enchId == 920001 || (enchId >= 950001 && enchId <= 950099);
     }
 
-    // Sort by priority (stable to preserve insertion order for ties)
-    std::stable_sort(entries.begin(), entries.end(),
-        [](EvalEntry const& a, EvalEntry const& b)
-        { return a.priority < b.priority; });
-
-    // Evaluate in priority order — first match wins
-    for (auto const& entry : entries)
+    bool IsQuestItem(ItemTemplate const* proto)
     {
-        if (entry.standaloneRule)
+        return proto->Class == ITEM_CLASS_QUEST
+            || proto->Bonding == BIND_QUEST_ITEM
+            || proto->Bonding == BIND_QUEST_ITEM1
+            || proto->StartQuest != 0;
+    }
+
+    LFR::ItemFacts Facts(Item const* item, ItemTemplate const* proto)
+    {
+        LFR::ItemFacts f;
+        f.entry = proto->ItemId;
+        f.quality = proto->Quality;
+        f.itemLevel = proto->ItemLevel;
+        f.sellPrice = proto->SellPrice;
+        f.itemClass = proto->Class;
+        f.subClass = proto->SubClass;
+        f.cursed = IsParagonCursedItem(item);
+        f.questItem = IsQuestItem(proto);
+        f.name = proto->Name1;
+        return f;
+    }
+
+    // Same predicate as mod-endless-storage: recipes, stackable food,
+    // stackable trade goods and gems.
+    bool IsStorageEligible(ItemTemplate const* proto)
+    {
+        if (proto->Class == ITEM_CLASS_RECIPE)
+            return true;
+        if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == 5
+            && proto->GetMaxStackSize() > 1)
+            return true;
+        if ((proto->Class == ITEM_CLASS_TRADE_GOODS
+            || proto->Class == ITEM_CLASS_GEM)
+            && proto->GetMaxStackSize() > 1)
+            return true;
+        return false;
+    }
+
+    void DepositToStorage(uint32 guid, ItemTemplate const* proto, uint32 count)
+    {
+        CharacterDatabase.Execute(
+            "INSERT INTO custom_endless_storage "
+            "(character_id, item_entry, item_class, item_subclass, amount) "
+            "VALUES ({}, {}, {}, {}, {}) "
+            "ON DUPLICATE KEY UPDATE amount = amount + {}",
+            guid, proto->ItemId, proto->Class, proto->SubClass, count, count);
+    }
+
+    std::string FormatMoney(uint64 copper)
+    {
+        uint64 const gold = copper / 10000;
+        uint64 const silver = (copper % 10000) / 100;
+        std::string result;
+        if (gold > 0)
+            result += std::to_string(gold) + "g ";
+        if (silver > 0 || gold > 0)
+            result += std::to_string(silver) + "s ";
+        result += std::to_string(copper % 100) + "c";
+        return result;
+    }
+
+    std::string ItemLink(ItemTemplate const* proto, int32 randomProperty)
+    {
+        std::string name = proto->Name1;
+        char const* suffix = nullptr;
+        uint8 const locale = sWorld->GetDefaultDbcLocale();
+        if (randomProperty > 0)
         {
-            // Standalone rule (OR)
-            if (MatchesCondition(*entry.standaloneRule, item, proto)
-                && IsActionAllowed(entry.standaloneRule->action))
-                return static_cast<LootFilterAction>(entry.standaloneRule->action);
+            if (ItemRandomPropertiesEntry const* e =
+                sItemRandomPropertiesStore.LookupEntry(
+                    static_cast<uint32>(randomProperty)))
+                suffix = e->Name[locale];
+        }
+        else if (randomProperty < 0)
+        {
+            if (ItemRandomSuffixEntry const* e =
+                sItemRandomSuffixStore.LookupEntry(
+                    static_cast<uint32>(-randomProperty)))
+                suffix = e->Name[locale];
+        }
+        if (suffix && *suffix)
+            name += std::string(" ") + suffix;
+
+        uint32 const color = proto->Quality < MAX_ITEM_QUALITY
+            ? ItemQualityColors[proto->Quality] : 0xffffffff;
+        return Acore::StringFormat("|c{:08x}|Hitem:{}:0:0:0:0:0:{}:0:0|h[{}]|h|r",
+            color, proto->ItemId, randomProperty, name);
+    }
+
+    std::string CountSuffix(uint32 count)
+    {
+        return count > 1 ? " x" + std::to_string(count) : std::string();
+    }
+
+    // ------------------------------------------------------------
+    // Addon messages to the window
+    // ------------------------------------------------------------
+
+    void SendAddon(Player* player, std::string const& message)
+    {
+        if (!player || !player->GetSession())
+            return;
+        std::string const full = std::string(PREFIX_OUT) + "\t" + message;
+        WorldPacket data(SMSG_MESSAGECHAT, full.size() + 32);
+        data << uint8(CHAT_MSG_WHISPER) << int32(LANG_ADDON);
+        data << player->GetGUID() << uint32(0) << player->GetGUID();
+        data << uint32(full.size() + 1) << full << uint8(0);
+        player->GetSession()->SendPacket(&data);
+    }
+
+    // Where the answers to one request go: the window, and with `echo` also
+    // the chat of the command that made it (.lootfilter request).
+    struct Reply
+    {
+        Player* player;
+        ChatHandler* echo;
+
+        void operator()(std::string const& message) const
+        {
+            SendAddon(player, message);
+            if (echo)
+                echo->SendSysMessage("LFLS " + message);
+        }
+    };
+
+    void SendSettings(Reply const& out, FilterState const& st)
+    {
+        out(Acore::StringFormat("I|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            st.filterEnabled ? 1 : 0, st.chatMode, conf_MaxRulesPerChar,
+            conf_AllowSell ? 1 : 0, conf_AllowDisenchant ? 1 : 0,
+            conf_AllowDelete ? 1 : 0, st.totalSold, st.totalDisenchanted,
+            st.totalDeleted, st.totalStored));
+    }
+
+    void SendRules(Reply const& out, FilterState const& st)
+    {
+        for (LFR::Rule const& rule : st.rules)
+            out("R|" + LFR::EncodeRule(rule));
+        out("N|" + std::to_string(st.rules.size()));
+    }
+
+    // ------------------------------------------------------------
+    // Database
+    // ------------------------------------------------------------
+
+    // Every rule change rewrites the character's whole rule set in one
+    // transaction: at most 30 rules of 4 conditions, and the cache stays the
+    // single source of truth.
+    void SaveRules(uint32 guid, std::vector<LFR::Rule> const& rules)
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        trans->Append(
+            "DELETE c FROM character_loot_filter_condition AS c "
+            "INNER JOIN character_loot_filter_rule AS r ON r.ruleId = c.ruleId "
+            "WHERE r.characterId = {}", guid);
+        trans->Append(
+            "DELETE FROM character_loot_filter_rule WHERE characterId = {}",
+            guid);
+        for (LFR::Rule const& rule : rules)
+        {
+            trans->Append(
+                "INSERT INTO character_loot_filter_rule "
+                "(ruleId, characterId, position, action, enabled) "
+                "VALUES ({}, {}, {}, {}, {})",
+                rule.id, guid, rule.position, rule.action,
+                rule.enabled ? 1 : 0);
+            for (std::size_t i = 0; i < rule.conditions.size(); ++i)
+            {
+                LFR::Condition const& c = rule.conditions[i];
+                std::string text = c.text;
+                CharacterDatabase.EscapeString(text);
+                trans->Append(
+                    "INSERT INTO character_loot_filter_condition "
+                    "(ruleId, slot, type, op, value, value2, text) "
+                    "VALUES ({}, {}, {}, {}, {}, {}, '{}')",
+                    rule.id, i, c.type, c.op, c.value, c.value2, text);
+            }
+        }
+        CharacterDatabase.CommitTransaction(trans);
+    }
+
+    void SaveSettings(uint32 guid, FilterState const& st)
+    {
+        CharacterDatabase.Execute(
+            "UPDATE character_loot_filter_settings SET filterEnabled = {}, "
+            "chatMode = {} WHERE characterId = {}",
+            st.filterEnabled ? 1 : 0, st.chatMode, guid);
+    }
+
+    void FlushBatch(uint32 guid, FilterBatch const& b)
+    {
+        if (b.Empty())
+            return;
+        CharacterDatabase.Execute(
+            "UPDATE character_loot_filter_settings SET "
+            "totalSold = totalSold + {}, "
+            "totalDisenchanted = totalDisenchanted + {}, "
+            "totalDeleted = totalDeleted + {}, "
+            "totalStored = totalStored + {} WHERE characterId = {}",
+            b.money, b.disenchanted, b.deleted, b.stored, guid);
+    }
+
+    FilterState LoadState(uint32 guid)
+    {
+        FilterState st;
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT filterEnabled, chatMode, totalSold, totalDisenchanted, "
+            "totalDeleted, totalStored FROM character_loot_filter_settings "
+            "WHERE characterId = {}", guid))
+        {
+            Field* f = result->Fetch();
+            st.filterEnabled = f[0].Get<uint8>() != 0;
+            st.chatMode = std::min<uint8>(f[1].Get<uint8>(),
+                static_cast<uint8>(LFR::CHAT_MODE_COUNT - 1));
+            st.totalSold = f[2].Get<uint64>();
+            st.totalDisenchanted = f[3].Get<uint32>();
+            st.totalDeleted = f[4].Get<uint32>();
+            st.totalStored = f[5].Get<uint32>();
         }
         else
+            CharacterDatabase.Execute(
+                "INSERT IGNORE INTO character_loot_filter_settings "
+                "(characterId) VALUES ({})", guid);
+
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT r.ruleId, r.position, r.action, r.enabled, c.slot, c.type, "
+            "c.op, c.value, c.value2, c.text "
+            "FROM character_loot_filter_rule AS r "
+            "LEFT JOIN character_loot_filter_condition AS c "
+            "ON c.ruleId = r.ruleId WHERE r.characterId = {} "
+            "ORDER BY r.position, r.ruleId, c.slot", guid))
         {
-            // AND group — all conditions must match
-            auto const& groupRules = groups[entry.groupId];
-            bool allMatch = true;
-            for (auto const* rule : groupRules)
+            do
             {
-                if (!MatchesCondition(*rule, item, proto))
+                Field* f = result->Fetch();
+                uint32 const ruleId = f[0].Get<uint32>();
+                if (st.rules.empty() || st.rules.back().id != ruleId)
                 {
-                    allMatch = false;
-                    break;
+                    LFR::Rule rule;
+                    rule.id = ruleId;
+                    rule.position = f[1].Get<uint8>();
+                    rule.action = f[2].Get<uint8>();
+                    rule.enabled = f[3].Get<uint8>() != 0;
+                    st.rules.push_back(std::move(rule));
+                }
+                if (f[4].IsNull())
+                    continue;
+                LFR::Condition c;
+                c.type = f[5].Get<uint8>();
+                c.op = f[6].Get<uint8>();
+                c.value = f[7].Get<uint32>();
+                c.value2 = f[8].Get<uint32>();
+                c.text = f[9].Get<std::string>();
+                st.rules.back().conditions.push_back(std::move(c));
+            } while (result->NextRow());
+        }
+
+        std::size_t const before = st.rules.size();
+        st.rules.erase(std::remove_if(st.rules.begin(), st.rules.end(),
+            [](LFR::Rule const& r) { return !LFR::ValidRule(r); }),
+            st.rules.end());
+        if (st.rules.size() != before)
+            LOG_WARN("module", "mod-loot-filter: character {} has {} invalid "
+                "rule(s) in the DB; they are ignored until the next save",
+                guid, before - st.rules.size());
+        LFR::SortByPosition(st.rules);
+        return st;
+    }
+
+    // ------------------------------------------------------------
+    // Startup: migrate the old one-condition table once
+    // ------------------------------------------------------------
+
+    // One above every rule id in use, condition rows included, so a row
+    // written by hand cannot collide with the next new rule.
+    uint32 NextFreeRuleId()
+    {
+        uint32 last = 0;
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT GREATEST("
+            "(SELECT COALESCE(MAX(ruleId), 0) FROM character_loot_filter_rule), "
+            "(SELECT COALESCE(MAX(ruleId), 0) FROM "
+            "character_loot_filter_condition)) AS lastId"))
+            last = static_cast<uint32>(result->Fetch()[0].Get<uint64>());
+        return last + 1;
+    }
+
+    bool TableExists(char const* table)
+    {
+        return CharacterDatabase.Query(
+            "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = "
+            "DATABASE() AND TABLE_NAME = '{}'", table) != nullptr;
+    }
+
+    void MigrateLegacyTable()
+    {
+        if (!TableExists("character_loot_filter"))
+            return;
+
+        if (TableExists("character_loot_filter_legacy"))
+        {
+            LOG_ERROR("module", "mod-loot-filter: both character_loot_filter "
+                "and character_loot_filter_legacy exist; nothing migrated - "
+                "check and drop one of them by hand");
+            return;
+        }
+
+        if (CharacterDatabase.Query(
+            "SELECT 1 FROM character_loot_filter_rule LIMIT 1"))
+        {
+            LOG_WARN("module", "mod-loot-filter: character_loot_filter_rule "
+                "already holds rules; the old table is only renamed");
+            CharacterDatabase.DirectExecute("RENAME TABLE "
+                "character_loot_filter TO character_loot_filter_legacy");
+            return;
+        }
+
+        bool const hasOp = CharacterDatabase.Query(
+            "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = "
+            "DATABASE() AND TABLE_NAME = 'character_loot_filter' "
+            "AND COLUMN_NAME = 'conditionOp'") != nullptr;
+
+        std::map<uint32, std::vector<LFR::LegacyRow>> perCharacter;
+        if (QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
+            "SELECT characterId, ruleId, ruleGroup, conditionType, {}, "
+            "conditionValue, conditionStr, action, priority, enabled "
+            "FROM character_loot_filter ORDER BY characterId, ruleId",
+            hasOp ? "conditionOp" : "0")))
+        {
+            do
+            {
+                Field* f = result->Fetch();
+                LFR::LegacyRow row;
+                row.characterId = f[0].Get<uint32>();
+                row.ruleId = f[1].Get<uint32>();
+                row.ruleGroup = f[2].Get<uint32>();
+                row.type = f[3].Get<uint8>();
+                row.op = f[4].Get<uint8>();
+                row.value = f[5].Get<uint32>();
+                row.text = f[6].Get<std::string>();
+                row.action = f[7].Get<uint8>();
+                row.priority = f[8].Get<uint8>();
+                row.enabled = f[9].Get<uint8>() != 0;
+                perCharacter[row.characterId].push_back(std::move(row));
+            } while (result->NextRow());
+        }
+
+        // The rule table is empty, so every condition row is an orphan of an
+        // earlier attempt and would collide with the new ids.
+        CharacterDatabase.DirectExecute(
+            "DELETE FROM character_loot_filter_condition");
+
+        uint32 nextId = 1;
+        uint32 rules = 0;
+        uint32 disabled = 0;
+        uint32 dropped = 0;
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        for (auto const& [characterId, rows] : perCharacter)
+        {
+            LFR::MigrationResult migrated = LFR::MigrateCharacter(rows);
+            disabled += migrated.disabled;
+            dropped += migrated.dropped;
+            for (LFR::Rule& rule : migrated.rules)
+            {
+                rule.id = nextId++;
+                ++rules;
+                trans->Append(
+                    "INSERT INTO character_loot_filter_rule "
+                    "(ruleId, characterId, position, action, enabled) "
+                    "VALUES ({}, {}, {}, {}, {})",
+                    rule.id, characterId, rule.position, rule.action,
+                    rule.enabled ? 1 : 0);
+                for (std::size_t i = 0; i < rule.conditions.size(); ++i)
+                {
+                    LFR::Condition const& c = rule.conditions[i];
+                    std::string text = c.text;
+                    CharacterDatabase.EscapeString(text);
+                    trans->Append(
+                        "INSERT INTO character_loot_filter_condition "
+                        "(ruleId, slot, type, op, value, value2, text) "
+                        "VALUES ({}, {}, {}, {}, {}, {}, '{}')",
+                        rule.id, i, c.type, c.op, c.value, c.value2, text);
                 }
             }
-            if (allMatch && !groupRules.empty())
+        }
+        CharacterDatabase.DirectCommitTransaction(trans);
+
+        // A failed commit only logs, so count before the old table goes.
+        uint64 stored = 0;
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT COUNT(*) AS n FROM character_loot_filter_rule"))
+            stored = result->Fetch()[0].Get<uint64>();
+        if (stored != rules)
+        {
+            LOG_ERROR("module", "mod-loot-filter: the migration wrote {} of {} "
+                "rule(s); character_loot_filter is left in place for another "
+                "attempt at the next start", stored, rules);
+            return;
+        }
+        CharacterDatabase.DirectExecute("RENAME TABLE character_loot_filter "
+            "TO character_loot_filter_legacy");
+
+        LOG_INFO("module", "mod-loot-filter: migrated {} rule(s) of {} "
+            "character(s) to the new tables ({} switched off for review, {} "
+            "dropped); the old table is now character_loot_filter_legacy",
+            rules, perCharacter.size(), disabled, dropped);
+    }
+
+    // ------------------------------------------------------------
+    // Actions
+    // ------------------------------------------------------------
+
+    std::vector<std::pair<uint32, uint32>> Disenchant(Player* player,
+        ItemTemplate const* proto)
+    {
+        std::vector<std::pair<uint32, uint32>> mats;
+        Loot loot;
+        loot.FillLoot(proto->DisenchantID, LootTemplates_Disenchant, player,
+            true);
+
+        uint32 const guid = player->GetGUID().GetCounter();
+        for (LootItem const& lootItem : loot.items)
+        {
+            ItemTemplate const* matProto =
+                sObjectMgr->GetItemTemplate(lootItem.itemid);
+            if (!matProto)
+                continue;
+            mats.emplace_back(lootItem.itemid, lootItem.count);
+            if (IsStorageEligible(matProto))
             {
-                uint8 action = groupRules.front()->action;
-                if (IsActionAllowed(action))
-                    return static_cast<LootFilterAction>(action);
+                DepositToStorage(guid, matProto, lootItem.count);
+                continue;
+            }
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest,
+                lootItem.itemid, lootItem.count) == EQUIP_ERR_OK)
+            {
+                if (Item* newItem = player->StoreNewItem(dest, lootItem.itemid,
+                    true))
+                    player->SendNewItem(newItem, lootItem.count, true, false);
+            }
+            else
+                player->SendItemRetrievalMail(lootItem.itemid, lootItem.count);
+        }
+        return mats;
+    }
+
+    struct LootFilterSummaryEvent : public BasicEvent
+    {
+        explicit LootFilterSummaryEvent(ObjectGuid playerGuid)
+            : _playerGuid(playerGuid) { }
+
+        bool Execute(uint64 /*time*/, uint32 /*diff*/) override
+        {
+            Player* player = ObjectAccessor::FindPlayer(_playerGuid);
+            if (!player)
+                return true;
+            uint32 const guid = player->GetGUID().GetCounter();
+
+            FilterBatch b;
+            uint8 mode = LFR::CHAT_NONE;
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                auto it = s_states.find(guid);
+                if (it == s_states.end())
+                    return true;
+                b = it->second.batch;
+                it->second.batch = FilterBatch();
+                mode = it->second.chatMode;
+            }
+
+            FlushBatch(guid, b);
+            if (!conf_LogActions || mode != LFR::CHAT_SUMMARY || b.Empty())
+                return true;
+
+            std::vector<std::string> parts;
+            if (b.soldItems)
+                parts.push_back("sold " + std::to_string(b.soldItems)
+                    + " for " + FormatMoney(b.money));
+            if (b.disenchanted)
+                parts.push_back("disenchanted "
+                    + std::to_string(b.disenchanted));
+            if (b.stored)
+                parts.push_back("stored " + std::to_string(b.stored));
+            if (b.deleted)
+                parts.push_back("deleted " + std::to_string(b.deleted));
+            std::string line;
+            for (std::size_t i = 0; i < parts.size(); ++i)
+                line += (i ? ", " : "") + parts[i];
+            line[0] = static_cast<char>(line[0] - 'a' + 'A');
+            ChatHandler(player->GetSession()).SendSysMessage(
+                std::string(CHAT_TAG) + line + ".");
+            return true;
+        }
+
+        ObjectGuid _playerGuid;
+    };
+
+    // Statistics, the batch (DB delta + summary), the window's log line and
+    // the per-action chat line.
+    void Record(Player* player, uint8 outcome, ItemTemplate const* proto,
+        int32 suffix, uint32 count, uint64 money, uint8 position,
+        std::vector<std::pair<uint32, uint32>> const& mats,
+        std::string const& link, char const* why)
+    {
+        uint32 const guid = player->GetGUID().GetCounter();
+        uint8 mode = LFR::CHAT_NONE;
+        bool schedule = false;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            auto it = s_states.find(guid);
+            if (it != s_states.end())
+            {
+                FilterState& st = it->second;
+                FilterBatch& b = st.batch;
+                switch (outcome)
+                {
+                    case LFR::ACTION_SELL:
+                        st.totalSold += money;
+                        b.soldItems += count;
+                        b.money += money;
+                        break;
+                    case LFR::ACTION_DISENCHANT:
+                        ++st.totalDisenchanted;
+                        ++b.disenchanted;
+                        break;
+                    case LFR::ACTION_DELETE:
+                        st.totalDeleted += count;
+                        b.deleted += count;
+                        break;
+                    case LFR::ACTION_STORE:
+                        st.totalStored += count;
+                        b.stored += count;
+                        break;
+                    default:
+                        break;
+                }
+                if (!b.Empty() && !b.pending)
+                {
+                    b.pending = true;
+                    schedule = true;
+                }
+                mode = st.chatMode;
             }
         }
-    }
+        if (schedule)
+            player->m_Events.AddEvent(
+                new LootFilterSummaryEvent(player->GetGUID()),
+                player->m_Events.CalculateTime(1));
 
-    // No rule matched → take no action. The item just stays in the
-    // inventory; auto-storage only happens via an explicit Keep rule.
-    return FILTER_ACTION_NONE;
-}
+        std::string matList;
+        for (std::size_t i = 0; i < mats.size(); ++i)
+            matList += (i ? "," : "") + std::to_string(mats[i].first) + ":"
+                + std::to_string(mats[i].second);
+        SendAddon(player, Acore::StringFormat("L|{}|{}|{}|{}|{}|{}|{}",
+            outcome, proto->ItemId, suffix, count, money, position, matList));
 
-// ============================================================
-// Copper → Gold/Silver/Copper formatting
-// ============================================================
+        if (!conf_LogActions || mode != LFR::CHAT_EVERY)
+            return;
 
-static std::string FormatMoney(uint32 copper)
-{
-    uint32 gold = copper / 10000;
-    uint32 silver = (copper % 10000) / 100;
-    uint32 cop = copper % 100;
-
-    std::string result;
-    if (gold > 0)
-        result += std::to_string(gold) + "g ";
-    if (silver > 0 || gold > 0)
-        result += std::to_string(silver) + "s ";
-    result += std::to_string(cop) + "c";
-    return result;
-}
-
-// ============================================================
-// Endless Storage integration — deposit eligible items directly
-// ============================================================
-
-static bool IsStorageEligible(ItemTemplate const* proto)
-{
-    if (proto->Class == ICLASS_RECIPE)
-        return true;
-    if (proto->Class == ICLASS_CONSUMABLE && proto->SubClass == 5
-        && proto->GetMaxStackSize() > 1)
-        return true;
-    if ((proto->Class == ICLASS_TRADE_GOODS || proto->Class == ICLASS_GEM)
-        && proto->GetMaxStackSize() > 1)
-        return true;
-    return false;
-}
-
-static void DepositToStorage(uint32 guid, uint32 entry,
-    uint32 itemClass, uint32 itemSubclass, uint32 count)
-{
-    CharacterDatabase.Execute(
-        "INSERT INTO custom_endless_storage "
-        "(character_id, item_entry, item_class, item_subclass, amount) "
-        "VALUES ({}, {}, {}, {}, {}) "
-        "ON DUPLICATE KEY UPDATE amount = amount + {}",
-        guid, entry, itemClass, itemSubclass, count, count);
-}
-
-// ============================================================
-// Action execution
-// ============================================================
-
-static void KeepItem(Player* player, Item* item)
-{
-    ItemTemplate const* proto = item->GetTemplate();
-    if (!proto)
-        return;
-
-    // If eligible for endless storage, deposit and remove from inventory
-    if (IsStorageEligible(proto))
-    {
-        uint32 guid = player->GetGUID().GetCounter();
-        uint32 count = item->GetCount();
-        DepositToStorage(guid, proto->ItemId, proto->Class,
-            proto->SubClass, count);
-        player->DestroyItem(
-            item->GetBagSlot(), item->GetSlot(), true);
-
-        if (conf_LogActions)
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff888888[Loot Filter]|r Stored [{}] x{} in Storage.",
-                proto->Name1, count);
-        return;
-    }
-
-    // Not storage-eligible, just keep in inventory
-    if (conf_LogActions)
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Keeping [{}].",
-            proto->Name1);
-}
-
-static void SellItem(Player* player, Item* item)
-{
-    ItemTemplate const* proto = item->GetTemplate();
-    uint32 count = item->GetCount();
-    uint32 sellPrice = proto->SellPrice * count;
-
-    // Don't sell items with no sell value — keep them instead
-    if (sellPrice == 0)
-    {
-        KeepItem(player, item);
-        return;
-    }
-
-    std::string itemName = proto->Name1;
-
-    player->ModifyMoney(sellPrice);
-
-    player->DestroyItem(
-        item->GetBagSlot(), item->GetSlot(), true);
-
-    uint32 guid = player->GetGUID().GetCounter();
-    {
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        s_filterSettings[guid].totalSold += sellPrice;
-    }
-
-    if (conf_LogActions)
-    {
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Sold {} for {}.",
-            itemName, FormatMoney(sellPrice));
-    }
-}
-
-static void DisenchantItem(Player* player, Item* item)
-{
-    ItemTemplate const* proto = item->GetTemplate();
-    std::string itemName = proto->Name1;
-
-    // Check if item has a disenchant loot template
-    if (proto->DisenchantID == 0)
-    {
-        // Not disenchantable — keep instead
-        if (conf_LogActions)
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff888888[Loot Filter]|r Cannot DE {} (not disenchantable), keeping.",
-                itemName);
-        KeepItem(player, item);
-        return;
-    }
-
-    // Generate disenchant loot and deposit materials into storage
-    Loot loot;
-    loot.FillLoot(proto->DisenchantID,
-        LootTemplates_Disenchant, player, true);
-
-    uint32 guid = player->GetGUID().GetCounter();
-    for (uint32 i = 0; i < loot.items.size(); ++i)
-    {
-        LootItem const& lootItem = loot.items[i];
-        ItemTemplate const* matProto =
-            sObjectMgr->GetItemTemplate(lootItem.itemid);
-        if (matProto && IsStorageEligible(matProto))
+        std::string line;
+        switch (outcome)
         {
-            DepositToStorage(guid, lootItem.itemid,
-                matProto->Class, matProto->SubClass, lootItem.count);
-            if (conf_LogActions)
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "|cff888888[Loot Filter]|r   → [{}] x{} stored.",
-                    matProto->Name1, lootItem.count);
-        }
-        else
-        {
-            // Non-eligible material goes to inventory
-            ItemPosCountVec dest;
-            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT,
-                dest, lootItem.itemid, lootItem.count) == EQUIP_ERR_OK)
+            case LFR::ACTION_SELL:
+                line = "Sold " + link + CountSuffix(count) + " for "
+                    + FormatMoney(money) + ".";
+                break;
+            case LFR::ACTION_DISENCHANT:
             {
-                Item* newItem = player->StoreNewItem(
-                    dest, lootItem.itemid, true);
-                if (newItem)
-                    player->SendNewItem(newItem, lootItem.count,
-                        true, false);
+                line = "Disenchanted " + link;
+                for (std::size_t i = 0; i < mats.size(); ++i)
+                {
+                    ItemTemplate const* matProto =
+                        sObjectMgr->GetItemTemplate(mats[i].first);
+                    if (!matProto)
+                        continue;
+                    line += (i ? ", " : ": ") + ItemLink(matProto, 0)
+                        + CountSuffix(mats[i].second);
+                }
+                line += ".";
+                break;
+            }
+            case LFR::ACTION_DELETE:
+                line = "Deleted " + link + CountSuffix(count) + ".";
+                break;
+            case LFR::ACTION_STORE:
+                line = "Stored " + link + CountSuffix(count)
+                    + (why ? std::string(" (") + why + ")" : std::string())
+                    + ".";
+                break;
+            default:
+                line = "Kept " + link + CountSuffix(count)
+                    + (why ? std::string(" (") + why + ")" : std::string())
+                    + ".";
+                break;
+        }
+        ChatHandler(player->GetSession()).SendSysMessage(
+            std::string(CHAT_TAG) + line);
+    }
+
+    void Act(Player* player, Item* item, ItemTemplate const* proto,
+        uint8 action, uint8 position)
+    {
+        uint32 const guid = player->GetGUID().GetCounter();
+        uint32 const count = item->GetCount();
+        int32 const suffix = item->GetItemRandomPropertyId();
+        std::string const link = ItemLink(proto, suffix);
+        uint8 outcome = action;
+        uint64 money = 0;
+        char const* why = nullptr;
+        std::vector<std::pair<uint32, uint32>> mats;
+
+        // The fallback of the first version's KeepItem: storage-eligible
+        // items go to the Endless Storage, anything else stays in the bags.
+        auto storeOrKeep = [&](char const* keptWhy, char const* storedWhy)
+        {
+            if (IsStorageEligible(proto))
+            {
+                DepositToStorage(guid, proto, count);
+                player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                outcome = LFR::ACTION_STORE;
+                why = storedWhy;
             }
             else
             {
-                player->SendItemRetrievalMail(
-                    lootItem.itemid, lootItem.count);
+                outcome = LFR::ACTION_KEEP;
+                why = keptWhy;
             }
-        }
-    }
-
-    // Destroy the original item
-    player->DestroyItem(
-        item->GetBagSlot(), item->GetSlot(), true);
-
-    {
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        s_filterSettings[guid].totalDisenchanted++;
-    }
-
-    if (conf_LogActions)
-    {
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Disenchanted {}.",
-            itemName);
-    }
-}
-
-static void DeleteItem(Player* player, Item* item)
-{
-    ItemTemplate const* proto = item->GetTemplate();
-    std::string itemName = proto->Name1;
-
-    player->DestroyItem(
-        item->GetBagSlot(), item->GetSlot(), true);
-
-    uint32 guid = player->GetGUID().GetCounter();
-    {
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        s_filterSettings[guid].totalDeleted++;
-    }
-
-    if (conf_LogActions)
-    {
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff888888[Loot Filter]|r Deleted {}.",
-            itemName);
-    }
-}
-
-// ============================================================
-// Deferred filter event — runs action on next server tick
-// ============================================================
-
-struct LootFilterEvent : public BasicEvent
-{
-    LootFilterEvent(Player* p, ObjectGuid itemGuid, LootFilterAction a)
-        : _playerGuid(p->GetGUID()), _itemGuid(itemGuid), _action(a) { }
-
-    bool Execute(uint64 /*time*/, uint32 /*diff*/) override
-    {
-        Player* player = ObjectAccessor::FindPlayer(_playerGuid);
-        if (!player)
-            return true;
-
-        Item* item = player->GetItemByGuid(_itemGuid);
-        if (!item)
-            return true;
-
-        // FILTER_ACTION_MAX is a sentinel meaning "evaluate now"
-        // (deferred so enchantments from other modules are applied)
-        LootFilterAction action = _action;
-        if (action == FILTER_ACTION_MAX)
-            action = EvaluateFilter(player, item);
+        };
 
         switch (action)
         {
-            case FILTER_ACTION_KEEP:
-                KeepItem(player, item);
+            case LFR::ACTION_STORE:
+                storeOrKeep("cannot be stored", nullptr);
                 break;
-            case FILTER_ACTION_SELL:
-                SellItem(player, item);
+            case LFR::ACTION_SELL:
+                money = uint64(proto->SellPrice) * count;
+                if (!money)
+                    storeOrKeep("no vendor price", "no vendor price");
+                else if (uint64(player->GetMoney()) + money > MAX_MONEY_AMOUNT)
+                {
+                    money = 0;
+                    storeOrKeep("gold limit", "gold limit");
+                }
+                else
+                {
+                    player->ModifyMoney(static_cast<int32>(money));
+                    player->DestroyItem(item->GetBagSlot(), item->GetSlot(),
+                        true);
+                }
                 break;
-            case FILTER_ACTION_DISENCHANT:
-                DisenchantItem(player, item);
+            case LFR::ACTION_DISENCHANT:
+                if (!proto->DisenchantID)
+                    storeOrKeep("cannot be disenchanted",
+                        "cannot be disenchanted");
+                else
+                {
+                    mats = Disenchant(player, proto);
+                    player->DestroyItem(item->GetBagSlot(), item->GetSlot(),
+                        true);
+                }
                 break;
-            case FILTER_ACTION_DELETE:
-                DeleteItem(player, item);
+            case LFR::ACTION_DELETE:
+                player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
                 break;
-            case FILTER_ACTION_NONE:
             default:
-                break;  // filter disabled — take no action
+                outcome = LFR::ACTION_KEEP;
+                break;
         }
+
+        Record(player, outcome, proto, suffix, count, money, position, mats,
+            link, why);
+    }
+
+    // Runs one tick after the loot hook, so mod-paragon-itemgen has set the
+    // slot 11 enchant the cursed check reads.
+    struct LootFilterEvent : public BasicEvent
+    {
+        LootFilterEvent(ObjectGuid playerGuid, ObjectGuid itemGuid)
+            : _playerGuid(playerGuid), _itemGuid(itemGuid) { }
+
+        bool Execute(uint64 /*time*/, uint32 /*diff*/) override
+        {
+            Player* player = ObjectAccessor::FindPlayer(_playerGuid);
+            if (!player)
+                return true;
+            Item* item = player->GetItemByGuid(_itemGuid);
+            if (!item)
+                return true;
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto)
+                return true;
+
+            LFR::Verdict verdict;
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                auto it = s_states.find(player->GetGUID().GetCounter());
+                if (it == s_states.end() || !it->second.filterEnabled)
+                    return true;
+                verdict = LFR::Evaluate(it->second.rules, Facts(item, proto),
+                    AllowedMask());
+            }
+            if (verdict.result < LFR::ACTION_COUNT)
+                Act(player, item, proto, verdict.result, verdict.position);
+            return true;
+        }
+
+        ObjectGuid _playerGuid;
+        ObjectGuid _itemGuid;
+    };
+
+    // ------------------------------------------------------------
+    // Window requests
+    // ------------------------------------------------------------
+
+    bool TakeToken(FilterState& st)
+    {
+        uint32 const now = getMSTime();
+        uint32 const refill = getMSTimeDiff(st.lastRefill, now)
+            / TOKEN_REFILL_MS;
+        if (refill)
+        {
+            st.tokens = std::min<uint32>(TOKEN_BURST, st.tokens + refill);
+            st.lastRefill = now;
+        }
+        if (!st.tokens)
+            return false;
+        --st.tokens;
         return true;
     }
 
-    ObjectGuid _playerGuid;
-    ObjectGuid _itemGuid;
-    LootFilterAction _action;
-};
+    LFR::Rule* FindRule(FilterState& st, uint32 id)
+    {
+        auto it = std::find_if(st.rules.begin(), st.rules.end(),
+            [id](LFR::Rule const& r) { return r.id == id; });
+        return it == st.rules.end() ? nullptr : &*it;
+    }
+
+    std::string VerdictText(FilterState const& st, Item const* item)
+    {
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+            return std::to_string(LFR::RESULT_NO_RULE) + "|0";
+        LFR::Verdict const v = LFR::Evaluate(st.rules, Facts(item, proto),
+            AllowedMask());
+        return std::to_string(v.result) + "|" + std::to_string(v.position);
+    }
+
+    void ScanBags(Reply const& out, Player* player, FilterState const& st)
+    {
+        uint32 count = 0;
+        auto report = [&](uint8 bag, uint8 slot, Item const* item)
+        {
+            uint32 cbag = 0;
+            uint32 cslot = 0;
+            if (!item || !LFR::ServerToClient(bag, slot, cbag, cslot))
+                return;
+            out(Acore::StringFormat("S|{}|{}|{}|{}", cbag, cslot,
+                VerdictText(st, item), item->GetEntry()));
+            ++count;
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START;
+            slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            report(INVENTORY_SLOT_BAG_0, slot,
+                player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START;
+            bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = player->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+            for (uint32 i = 0; i < bag->GetBagSize(); ++i)
+                report(bagSlot, static_cast<uint8>(i),
+                    bag->GetItemByPos(static_cast<uint8>(i)));
+        }
+        out("Z|" + std::to_string(count));
+    }
+
+    void HandleRequest(Player* player, std::string const& payload,
+        ChatHandler* echo = nullptr)
+    {
+        Reply const out{ player, echo };
+        if (!conf_Enable)
+        {
+            out("!|disabled");
+            return;
+        }
+
+        std::vector<std::string> const f = LFR::Split(payload, '|');
+        if (f[0].size() != 1)
+            return;
+        char const cmd = f[0][0];
+        uint32 const guid = player->GetGUID().GetCounter();
+
+        std::lock_guard<std::mutex> lock(s_mutex);
+        auto it = s_states.find(guid);
+        if (it == s_states.end())
+            return;
+        FilterState& st = it->second;
+        if (!TakeToken(st))
+        {
+            out("!|busy");
+            return;
+        }
+
+        uint32 a = 0;
+        uint32 b = 0;
+        switch (cmd)
+        {
+            case 'G':
+                SendSettings(out, st);
+                SendRules(out, st);
+                break;
+            case 'R':
+            {
+                LFR::Rule rule;
+                if (f.size() != 6 || !LFR::DecodeRule(f, 1, rule))
+                {
+                    out("!|invalid");
+                    break;
+                }
+                if (!(AllowedMask() & (1u << rule.action)))
+                {
+                    out("!|action");
+                    break;
+                }
+                uint32 const pos = rule.position;
+                if (rule.id == 0)
+                {
+                    if (st.rules.size() >= conf_MaxRulesPerChar)
+                    {
+                        out("!|limit");
+                        break;
+                    }
+                    rule.id = s_nextRuleId++;
+                    LFR::Insert(st.rules, std::move(rule), pos);
+                }
+                else
+                {
+                    LFR::Rule* existing = FindRule(st, rule.id);
+                    if (!existing)
+                    {
+                        out("!|notfound");
+                        break;
+                    }
+                    existing->action = rule.action;
+                    existing->enabled = rule.enabled;
+                    existing->conditions = std::move(rule.conditions);
+                    if (pos && pos != existing->position)
+                        LFR::Move(st.rules, rule.id, pos);
+                }
+                SaveRules(guid, st.rules);
+                SendRules(out, st);
+                break;
+            }
+            case 'D':
+                if (f.size() != 2 || !LFR::ParseUInt(f[1], 0xFFFFFFFFu, a)
+                    || !LFR::Remove(st.rules, a))
+                {
+                    out("!|notfound");
+                    break;
+                }
+                SaveRules(guid, st.rules);
+                SendRules(out, st);
+                break;
+            case 'M':
+                if (f.size() != 3 || !LFR::ParseUInt(f[1], 0xFFFFFFFFu, a)
+                    || !LFR::ParseUInt(f[2], 255, b) || !b
+                    || !LFR::Move(st.rules, a, b))
+                {
+                    out("!|notfound");
+                    break;
+                }
+                SaveRules(guid, st.rules);
+                SendRules(out, st);
+                break;
+            case 'E':
+            {
+                LFR::Rule* rule = nullptr;
+                if (f.size() != 3 || !LFR::ParseUInt(f[1], 0xFFFFFFFFu, a)
+                    || !LFR::ParseUInt(f[2], 1, b)
+                    || !(rule = FindRule(st, a)))
+                {
+                    out("!|notfound");
+                    break;
+                }
+                rule->enabled = b != 0;
+                SaveRules(guid, st.rules);
+                SendRules(out, st);
+                break;
+            }
+            case 'F':
+                if (f.size() != 2 || !LFR::ParseUInt(f[1], 1, a))
+                    break;
+                st.filterEnabled = a != 0;
+                SaveSettings(guid, st);
+                out(std::string("F|") + (a ? "1" : "0"));
+                break;
+            case 'C':
+                if (f.size() != 2
+                    || !LFR::ParseUInt(f[1], LFR::CHAT_MODE_COUNT - 1, a))
+                    break;
+                st.chatMode = static_cast<uint8>(a);
+                SaveSettings(guid, st);
+                SendSettings(out, st);
+                break;
+            case 'X':
+                st.rules.clear();
+                SaveRules(guid, st.rules);
+                SendRules(out, st);
+                break;
+            case 'T':
+            {
+                uint8 bag = 0;
+                uint8 slot = 0;
+                Item* item = nullptr;
+                if (f.size() != 3 || !LFR::ParseUInt(f[1], 4, a)
+                    || !LFR::ParseUInt(f[2], 255, b)
+                    || !LFR::ClientToServer(a, b, bag, slot)
+                    || !(item = player->GetItemByPos(bag, slot)))
+                {
+                    out("!|noitem");
+                    break;
+                }
+                out(Acore::StringFormat("T|{}|{}|{}|{}", a, b,
+                    VerdictText(st, item), item->GetEntry()));
+                break;
+            }
+            case 'S':
+            {
+                uint32 const now = getMSTime();
+                if (st.scanned
+                    && getMSTimeDiff(st.lastScan, now) < SCAN_INTERVAL_MS)
+                {
+                    out("!|busy");
+                    break;
+                }
+                st.scanned = true;
+                st.lastScan = now;
+                ScanBags(out, player, st);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
 
 // ============================================================
-// WorldScript — config loading
+// WorldScript — configuration and the startup migration
 // ============================================================
 
 class LootFilter_World : public WorldScript
 {
 public:
-    LootFilter_World() : WorldScript("LootFilter_World") { }
+    LootFilter_World() : WorldScript("LootFilter_World",
+        {
+            WORLDHOOK_ON_AFTER_CONFIG_LOAD,
+            WORLDHOOK_ON_STARTUP
+        }) { }
 
     void OnAfterConfigLoad(bool /*reload*/) override
     {
-        conf_Enable = sConfigMgr->GetOption<bool>(
-            "LootFilter.Enable", true);
+        conf_Enable = sConfigMgr->GetOption<bool>("LootFilter.Enable", true);
         conf_AllowSell = sConfigMgr->GetOption<bool>(
             "LootFilter.AllowSell", true);
         conf_AllowDisenchant = sConfigMgr->GetOption<bool>(
@@ -644,13 +1096,19 @@ public:
             "LootFilter.AllowDelete", true);
         conf_LogActions = sConfigMgr->GetOption<bool>(
             "LootFilter.LogActions", true);
-        conf_MaxRulesPerChar = sConfigMgr->GetOption<uint32>(
-            "LootFilter.MaxRulesPerChar", 30);
+        conf_MaxRulesPerChar = std::clamp<uint32>(sConfigMgr->GetOption<uint32>(
+            "LootFilter.MaxRulesPerChar", 30), 1, 100);
+    }
+
+    void OnStartup() override
+    {
+        MigrateLegacyTable();
+        s_nextRuleId = NextFreeRuleId();
     }
 };
 
 // ============================================================
-// PlayerScript — hooks for loot processing and data lifecycle
+// PlayerScript — state lifecycle, loot hook, window requests
 // ============================================================
 
 class LootFilter_Player : public PlayerScript
@@ -660,174 +1118,188 @@ public:
         {
             PLAYERHOOK_ON_LOGIN,
             PLAYERHOOK_ON_LOGOUT,
-            PLAYERHOOK_ON_LOOT_ITEM
+            PLAYERHOOK_ON_LOOT_ITEM,
+            PLAYERHOOK_ON_BEFORE_SEND_CHAT_MESSAGE,
+            PLAYERHOOK_ON_DELETE_FROM_DB
         }) { }
 
     void OnPlayerLogin(Player* player) override
     {
         if (!conf_Enable)
             return;
-
-        uint32 guid = player->GetGUID().GetCounter();
-        LoadRulesForPlayer(guid);
-        LoadSettingsForPlayer(guid);
+        uint32 const guid = player->GetGUID().GetCounter();
+        FilterState st = LoadState(guid);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_states[guid] = std::move(st);
     }
 
     void OnPlayerLogout(Player* player) override
     {
-        uint32 guid = player->GetGUID().GetCounter();
-        SaveStats(guid);
-
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        s_filterRules.erase(guid);
-        s_filterSettings.erase(guid);
+        uint32 const guid = player->GetGUID().GetCounter();
+        FilterBatch b;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            auto it = s_states.find(guid);
+            if (it == s_states.end())
+                return;
+            b = it->second.batch;
+            s_states.erase(it);
+        }
+        FlushBatch(guid, b);
     }
 
-    void OnPlayerLootItem(Player* player, Item* item,
-        uint32 /*count*/, ObjectGuid /*lootguid*/) override
+    void OnPlayerLootItem(Player* player, Item* item, uint32 /*count*/,
+        ObjectGuid /*lootguid*/) override
     {
         if (!conf_Enable || !item)
             return;
-
-        // Always reload rules from DB before evaluating, since
-        // rules may have been changed via AIO/Lua without C++
-        // cache being notified.
-        uint32 guid = player->GetGUID().GetCounter();
-        LoadRulesForPlayer(guid);
-        LoadSettingsForPlayer(guid);
-
-        // Defer evaluation to next tick so that other modules
-        // (e.g. mod-paragon-itemgen) have finished setting
-        // enchantments on the item. This is critical for cursed
-        // item detection which reads slot 11 enchantment IDs.
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            auto it = s_states.find(player->GetGUID().GetCounter());
+            if (it == s_states.end() || !it->second.filterEnabled
+                || it->second.rules.empty())
+                return;
+        }
         player->m_Events.AddEvent(
-            new LootFilterEvent(player, item->GetGUID(),
-                FILTER_ACTION_MAX),  // sentinel: evaluate later
+            new LootFilterEvent(player->GetGUID(), item->GetGUID()),
             player->m_Events.CalculateTime(1));
+    }
+
+    void OnPlayerBeforeSendChatMessage(Player* player, uint32& type,
+        uint32& lang, std::string& message) override
+    {
+        if (type != CHAT_MSG_WHISPER || lang != LANG_ADDON
+            || message.compare(0, PREFIX_IN_LEN, PREFIX_IN) != 0
+            || message.size() > PREFIX_IN_LEN + LFR::MAX_MESSAGE)
+            return;
+        HandleRequest(player, message.substr(PREFIX_IN_LEN));
+    }
+
+    void OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans,
+        uint32 guid) override
+    {
+        trans->Append(
+            "DELETE c FROM character_loot_filter_condition AS c "
+            "INNER JOIN character_loot_filter_rule AS r ON r.ruleId = c.ruleId "
+            "WHERE r.characterId = {}", guid);
+        trans->Append(
+            "DELETE FROM character_loot_filter_rule WHERE characterId = {}",
+            guid);
+        trans->Append(
+            "DELETE FROM character_loot_filter_settings WHERE characterId = {}",
+            guid);
     }
 };
 
 // ============================================================
-// Eluna hooks for AIO communication (rule CRUD)
+// Commands
 // ============================================================
 
-// These are called from Lua via server-side AIO handlers.
-// The C++ side exposes helper functions that the Lua layer calls
-// through Eluna's direct DB access. All rule management is done
-// in Lua/SQL, and the C++ side just needs to reload the cache.
-
-// Provide a global function that Lua can trigger to reload cache
 class LootFilter_Command : public CommandScript
 {
 public:
-    LootFilter_Command()
-        : CommandScript("LootFilter_Command") { }
+    LootFilter_Command() : CommandScript("LootFilter_Command") { }
 
     ChatCommandTable GetCommands() const override
     {
         static ChatCommandTable lootFilterTable =
         {
-            { "reload",  HandleReloadCmd,
-              SEC_PLAYER, Console::No },
-            { "toggle",  HandleToggleCmd,
-              SEC_PLAYER, Console::No },
-            { "stats",   HandleStatsCmd,
-              SEC_PLAYER, Console::No },
+            { "reload", HandleReloadCmd, SEC_PLAYER, Console::No },
+            { "toggle", HandleToggleCmd, SEC_PLAYER, Console::No },
+            { "stats",  HandleStatsCmd,  SEC_PLAYER, Console::No },
+            { "request", HandleRequestCmd, SEC_PLAYER, Console::No },
         };
-
         static ChatCommandTable commandTable =
         {
             { "lootfilter", lootFilterTable },
         };
-
         return commandTable;
     }
 
-    static bool HandleReloadCmd(ChatHandler* handler,
-        Tail /*args*/)
+    // Re-reads the character's rules and settings, e.g. after a manual SQL
+    // edit (the core is otherwise the only writer).
+    static bool HandleReloadCmd(ChatHandler* handler, Tail /*args*/)
     {
         Player* player = handler->GetPlayer();
         if (!player)
             return false;
-
-        uint32 guid = player->GetGUID().GetCounter();
-        LoadRulesForPlayer(guid);
-        LoadSettingsForPlayer(guid);
-
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        handler->PSendSysMessage(
-            "|cff00cc00[Loot Filter]|r Rules reloaded ({} rules).",
-            static_cast<uint32>(s_filterRules[guid].size()));
-        return true;
-    }
-
-    static bool HandleToggleCmd(ChatHandler* handler,
-        Tail /*args*/)
-    {
-        Player* player = handler->GetPlayer();
-        if (!player)
-            return false;
-
-        uint32 guid = player->GetGUID().GetCounter();
-
+        uint32 const guid = player->GetGUID().GetCounter();
+        FilterState st = LoadState(guid);
+        std::size_t rules = 0;
+        uint32 const next = NextFreeRuleId();
+        if (next > s_nextRuleId)
+            s_nextRuleId = next;
         {
-            std::lock_guard<std::mutex> lock(s_filterMutex);
-            auto it = s_filterSettings.find(guid);
-            if (it != s_filterSettings.end())
-            {
-                it->second.filterEnabled =
-                    !it->second.filterEnabled;
-                CharacterDatabase.Execute(
-                    "UPDATE `character_loot_filter_settings` "
-                    "SET `filterEnabled` = {} "
-                    "WHERE `characterId` = {}",
-                    it->second.filterEnabled ? 1 : 0, guid);
-                handler->PSendSysMessage(
-                    "|cff00cc00[Loot Filter]|r Filter {}.",
-                    it->second.filterEnabled
-                        ? "enabled" : "disabled");
-            }
+            std::lock_guard<std::mutex> lock(s_mutex);
+            FilterState& slot = s_states[guid];
+            st.batch = slot.batch;
+            slot = std::move(st);
+            rules = slot.rules.size();
+            Reply const out{ player, nullptr };
+            SendSettings(out, slot);
+            SendRules(out, slot);
         }
-
+        handler->PSendSysMessage("{}Rules reloaded ({} rules).", CHAT_TAG,
+            rules);
         return true;
     }
 
-    static bool HandleStatsCmd(ChatHandler* handler,
-        Tail /*args*/)
+    static bool HandleToggleCmd(ChatHandler* handler, Tail /*args*/)
     {
         Player* player = handler->GetPlayer();
         if (!player)
             return false;
-
-        uint32 guid = player->GetGUID().GetCounter();
-
-        std::lock_guard<std::mutex> lock(s_filterMutex);
-        auto it = s_filterSettings.find(guid);
-        if (it == s_filterSettings.end())
+        uint32 const guid = player->GetGUID().GetCounter();
+        bool enabled = false;
         {
-            handler->PSendSysMessage(
-                "|cff00cc00[Loot Filter]|r No stats available.");
+            std::lock_guard<std::mutex> lock(s_mutex);
+            auto it = s_states.find(guid);
+            if (it == s_states.end())
+                return true;
+            it->second.filterEnabled = !it->second.filterEnabled;
+            enabled = it->second.filterEnabled;
+            SaveSettings(guid, it->second);
+        }
+        SendAddon(player, enabled ? "F|1" : "F|0");
+        handler->PSendSysMessage("{}Filter {}.", CHAT_TAG,
+            enabled ? "enabled" : "disabled");
+        return true;
+    }
+
+    // The window's protocol as a chat command: the same handler, limits and
+    // validation, with the answers also printed ("LFLS <message>"). For test
+    // bots and debugging; a player gains nothing the window cannot do.
+    static bool HandleRequestCmd(ChatHandler* handler, Tail payload)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+        std::string const request(payload);
+        if (request.empty() || request.size() > LFR::MAX_MESSAGE)
+            return false;
+        HandleRequest(player, request, handler);
+        return true;
+    }
+
+    static bool HandleStatsCmd(ChatHandler* handler, Tail /*args*/)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+        std::lock_guard<std::mutex> lock(s_mutex);
+        auto it = s_states.find(player->GetGUID().GetCounter());
+        if (it == s_states.end())
+        {
+            handler->PSendSysMessage("{}No stats available.", CHAT_TAG);
             return true;
         }
-
-        auto const& s = it->second;
-        uint32 gold   = s.totalSold / 10000;
-        uint32 silver = (s.totalSold % 10000) / 100;
-        uint32 copper = s.totalSold % 100;
-
-        handler->PSendSysMessage(
-            "|cff00cc00[Loot Filter]|r Stats:");
-        handler->PSendSysMessage(
-            "  Filter: {} | Rules: {}",
-            s.filterEnabled ? "|cff00ff00ON|r" : "|cffff0000OFF|r",
-            static_cast<uint32>(s_filterRules.count(guid)
-                ? s_filterRules[guid].size() : 0));
-        handler->PSendSysMessage(
-            "  Gold earned: {}g {}s {}c", gold, silver, copper);
-        handler->PSendSysMessage(
-            "  Disenchanted: {} | Deleted: {}",
-            s.totalDisenchanted, s.totalDeleted);
-
+        FilterState const& st = it->second;
+        handler->PSendSysMessage("{}Filter: {} | Rules: {}", CHAT_TAG,
+            st.filterEnabled ? "|cff00ff00ON|r" : "|cffff0000OFF|r",
+            st.rules.size());
+        handler->PSendSysMessage("  Gold earned: {}", FormatMoney(st.totalSold));
+        handler->PSendSysMessage("  Disenchanted: {} | Stored: {} | Deleted: {}",
+            st.totalDisenchanted, st.totalStored, st.totalDeleted);
         return true;
     }
 };

@@ -1,9 +1,9 @@
 #
 # mod-loot-filter configuration
 #
-# Automatic loot filtering — items picked up by mod-auto-loot
-# are checked against per-character filter rules and automatically
-# sold, disenchanted, or destroyed.
+# Automatic loot filtering — every looted item is checked against the
+# character's rules (window: /lf) and kept, moved to the Endless
+# Storage, sold, disenchanted or deleted. Quest items are never touched.
 #
 
 ########################################
@@ -20,7 +20,8 @@ LootFilter.Enable = 1
 
 #
 #    LootFilter.AllowSell
-#        Description: Allow auto-sell action (vendor price)
+#        Description: Allow the Sell action (vendor price). When 0, rules with
+#                     this action are skipped and the editor greys it out.
 #        Default:     1 (Enabled)
 #
 
@@ -28,7 +29,9 @@ LootFilter.AllowSell = 1
 
 #
 #    LootFilter.AllowDisenchant
-#        Description: Allow auto-disenchant action (requires Enchanting skill)
+#        Description: Allow the Disenchant action (no Enchanting skill needed;
+#                     materials go to the Endless Storage). When 0, rules with
+#                     this action are skipped.
 #        Default:     1 (Enabled)
 #
 
@@ -36,7 +39,8 @@ LootFilter.AllowDisenchant = 1
 
 #
 #    LootFilter.AllowDelete
-#        Description: Allow auto-delete action (destroy item)
+#        Description: Allow the Delete action (destroys the item). When 0, rules
+#                     with this action are skipped.
 #        Default:     1 (Enabled)
 #
 
@@ -44,7 +48,9 @@ LootFilter.AllowDelete = 1
 
 #
 #    LootFilter.LogActions
-#        Description: Show chat messages when items are filtered
+#        Description: Server-wide chat switch. 1 = each character's chat mode
+#                     applies (every action / one summary per loot / none,
+#                     set in the Log tab); 0 = no chat output at all.
 #        Default:     1 (Enabled)
 #
 
@@ -52,7 +58,7 @@ LootFilter.LogActions = 1
 
 #
 #    LootFilter.MaxRulesPerChar
-#        Description: Maximum number of filter rules per character
+#        Description: Maximum number of rules per character (1-100)
 #        Default:     30
 #
 
