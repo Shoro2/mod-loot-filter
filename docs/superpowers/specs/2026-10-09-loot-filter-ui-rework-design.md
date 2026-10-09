@@ -95,9 +95,13 @@ Condition types keep the old numbers: 0 quality, 1 item level, 2 sell price, 3 i
 class, value2 = subclass or 255 = any), 5 cursed (value 1/0), 6 item (value = entry), 7 name contains
 (text); 4 is retired. Operators: 0 is, 1 at least, 2 at most.
 
-Migration (in `data/sql/db-characters/loot_filter_tables.sql`, idempotent and guarded by
-`INFORMATION_SCHEMA`, because the updater re-applies a module file whenever its bytes change), only
-while `character_loot_filter` exists and the new rule table is empty:
+Schema changes live in `data/sql/db-characters/loot_filter_tables.sql`, rewritten to create only the
+new tables and to add the settings columns behind `INFORMATION_SCHEMA` guards (the updater re-applies
+a module file whenever its bytes change, so it must be idempotent; it no longer creates the old table).
+The **rule migration runs in C++** at worldserver start (`WorldScript::OnStartup`, which runs before the
+world loop accepts logins), through the pure `MigrateLegacy()` in `LootFilterRules.h`, so it is covered
+by the offline test. It runs while `character_loot_filter` exists and the new rule table is empty; if
+the rule table already has rows, the old table is only renamed:
 
 1. Each enabled standalone row becomes a one-condition rule; each group becomes one rule from its
    enabled rows, action = the action of its lowest-priority row; a group or row with no enabled row
@@ -111,7 +115,9 @@ while `character_loot_filter` exists and the new rule table is empty:
    STORAGE, so it keeps depositing.
 6. A group with more than four enabled rows becomes a **disabled** rule with its first four conditions
    by priority (dropping an AND condition would widen the rule, which matters for Delete).
-7. The old table is renamed `character_loot_filter_legacy`; nothing is dropped.
+7. Rows that cannot be expressed exactly (an operator on class, subclass or item id; a name longer than
+   40 characters or with other characters; an empty name) put their rule in the disabled state.
+8. The old table is renamed `character_loot_filter_legacy` after the inserts commit; nothing is dropped.
 
 ## 6. Architecture
 
@@ -160,8 +166,9 @@ client UI (Lua, shipped by AIO) ──addon "LFLT"──▶ C++ (the only owner)
 - Offline: a standalone C++ test of `LootFilterRules` (codec round trips, validation rejects, matching,
   evaluation order, quest protection), compiled with `cl` like `mod-fl-player-reports/tests`; a Lua
   harness with a mocked WoW API for the client (sentences, editor validation, message building and
-  parsing, list handling); the migration SQL run against a scratch schema loaded with the host's 19
-  rules (from the nightly dump, local only) and with constructed edge cases.
+  parsing, list handling); `MigrateLegacy()` against the host's 19 rules (copied from the nightly dump
+  as test data without character names) and constructed edge cases; the schema SQL applied twice to a
+  scratch schema (idempotency).
 - T1 on the workbench in a free build window: build, boot, errors baseline (the 74 CoA lines), a
   `mod-fl-testbots` scenario (sell, store, disenchant, delete, keep, quest protection, summary line,
   statistics in the DB), the probe client (CRTEST) for the four tabs with a screenshot each.
