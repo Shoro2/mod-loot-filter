@@ -1,0 +1,9 @@
+-- =============================================================
+-- mod-loot-filter — server half (intentionally empty)
+--
+-- Since the 2026-10 rework the core (src/LootFilter.cpp) owns the rules
+-- and answers the window over addon messages, so nothing runs here. The
+-- client file registers itself with AIO.AddAddon(). This file keeps its
+-- name so a deploy overwrites the old AIO handlers instead of leaving
+-- them live: the host deploy never deletes files.
+-- =============================================================
