@@ -16,6 +16,8 @@ name    mod-loot-filter - rules, loot, actions
 timeout 240s
 
 bot b mage
+# mod-auto-loot skips any player in a group (mod_auto_loot.cpp: GetGroup()), so no party
+group none
 
 place 0 -147.4 -1122.5 35
 require b alive
@@ -34,6 +36,7 @@ expect output has "|1|1|1|0:0:1:0:;3:0:7:8:"
 expect output has "LFLS N|1"
 pick t1 creature:2408 near b
 require t1 alive
+do b offset 6 6
 do b approach t1
 do b cast 42891 on t1 triggered
 waitfor t1 dead timeout 5s
@@ -50,6 +53,7 @@ as b .lootfilter request R|0|0|4|1|3:0:7:255:
 expect output has "LFLS N|1"
 pick t2 creature:2408 near b
 require t2 alive
+do b offset 6 6
 do b approach t2
 do b cast 42891 on t2 triggered
 waitfor t2 dead timeout 5s
@@ -70,6 +74,7 @@ as b .lootfilter request X
 as b .lootfilter request R|0|0|2|1|6:0:3712:0:
 pick t7 creature:2408 near b
 require t7 alive
+do b offset 6 6
 do b approach t7
 do b cast 42891 on t7 triggered
 waitfor t7 dead timeout 5s
@@ -82,6 +87,7 @@ as b .lootfilter request X
 as b .lootfilter request R|0|0|0|1|3:0:7:255:
 pick t3 creature:2408 near b
 require t3 alive
+do b offset 6 6
 do b approach t3
 do b cast 42891 on t3 triggered
 waitfor t3 dead timeout 5s
@@ -104,6 +110,7 @@ expect output has "LFLS N|2"
 expect output has "LFLS R|"
 pick t4 creature:2408 near b
 require t4 alive
+do b offset 6 6
 do b approach t4
 do b cast 42891 on t4 triggered
 waitfor t4 dead timeout 5s
@@ -117,6 +124,7 @@ as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request R|0|1|0|1|6:0:3712:0:
 pick t5 creature:2408 near b
 require t5 alive
+do b offset 6 6
 do b approach t5
 do b cast 42891 on t5 triggered
 waitfor t5 dead timeout 5s
@@ -131,6 +139,7 @@ as b .lootfilter request F|0
 expect output has "LFLS F|0"
 pick t6 creature:2408 near b
 require t6 alive
+do b offset 6 6
 do b approach t6
 do b cast 42891 on t6 triggered
 waitfor t6 dead timeout 5s
@@ -144,6 +153,7 @@ place 0 705 610 45
 do b destroy 3317
 pick g1 creature:1939 near b
 require g1 alive
+do b offset 6 6
 do b approach g1
 do b cast 42891 on g1 triggered
 waitfor g1 dead timeout 5s
