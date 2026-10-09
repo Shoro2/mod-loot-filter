@@ -26,7 +26,8 @@ mod-loot-filter/
 │   ├── build_offline.cmd                  # builds + runs rules_test and client_test (writes build/)
 │   ├── rules_test.cpp                     # LootFilterRules.h: 204 checks
 │   ├── client_test.lua                    # the window against a mocked FrameXML API: 93 checks
-│   └── schema_test.ps1                    # the SQL twice on a scratch schema (workbench MySQL)
+│   ├── schema_test.ps1                    # the SQL twice on a scratch schema (workbench MySQL)
+│   └── loot_filter.tbs                    # mod-fl-testbots scenario: rules, loot, actions (T1)
 ├── include.sh                             # Build integration (registers SQL paths)
 ├── CLAUDE.md, INDEX.md, README.md, data_structure.md, functions.md, log.md, todo.md
 └── .gitignore                             # build/

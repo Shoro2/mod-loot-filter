@@ -113,6 +113,7 @@ with '='**, which the March 2026 UI saved for "below".
 | `.lootfilter reload` | re-reads settings and rules from the DB (after manual SQL) and sends them to the window |
 | `.lootfilter toggle` | filter on/off, saved, window updated |
 | `.lootfilter stats` | totals |
+| `.lootfilter request <payload>` | the window's protocol from chat (same handler, limits, validation); the answers are also printed as `LFLS <message>` — for test bots and debugging |
 
 ## Configuration
 
@@ -128,6 +129,9 @@ with '='**, which the March 2026 UI saved for "below".
 - `tests\build_offline.cmd` — compiles `tests/rules_test.cpp` against `LootFilterRules.h` (MSVC, `/W4 /WX`,
   only `Define.h` from the core) and runs the client harness `tests/client_test.lua` with a Lua 5.2 built
   from `dcore_bin\_deps\lua52-src` into `build\`.
+- `tests/loot_filter.tbs` — mod-fl-testbots scenario (queue `loot_filter`): a bot kills Wild Turkeys (32820, one
+  Wild Turkey 44834 each, looted by mod-auto-loot) under SELL, TO STORAGE, KEEP, KEEP-over-DELETE (off and on),
+  filter off, a bag scan and invalid requests, and checks the bags.
 - `tests\schema_test.ps1` — the SQL file twice on a scratch schema `lf_schema_test` (fresh and on the old
   tables), dropped afterwards.
 

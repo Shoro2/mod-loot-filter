@@ -38,7 +38,7 @@ src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migratio
 | | `character_loot_filter_legacy` | the pre-2026-10 table, renamed after the one-time migration; kept, never read |
 | Addon prefixes | `LFLT` (client → core), `LFLS` (core → client) | formats in [`functions.md`](./functions.md#addon-messages) |
 | Slash | `/lf`, `/lootfilter` (`reload`, `minimap`) | global `LootFilter_Toggle()` for the command hub |
-| Commands | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats` | `SEC_PLAYER` |
+| Commands | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats`, `.lootfilter request <payload>` | `SEC_PLAYER`; `request` = the window's protocol from chat (bots, debugging) |
 | Saved var (client) | `LootFilterUI_Prefs` | minimap angle / hidden, per character (AIO) |
 | DBC / spells / items / NPCs | none | |
 
