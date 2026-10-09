@@ -4,6 +4,7 @@
 
 ## 2026
 
+- 2026-10-09 — T1 on the workbench: build (0 warnings) + boot 19:58 local (the updater re-applied the schema file; "migrated 14 rule(s) of 2 character(s) … (1 switched off for review, 0 dropped)"; errors log unchanged), probe look with CRTEST1 (window via AIO, four views, rules saved end to end), bot scenario `tests/loot_filter.tbs` run 574 PASSED 57/0 (runs 567-573 fixed the scenario: event-only Wild Turkeys, Death Touch refused, auto-loot skips groups, corpses picked, near-teleport timing). Review fixes: sell/disenchant fallback stores again, migration count check, protective '=' rules stay on, editor menus, stuck test/scan. Host: MIG-113 (vault FL/15).
 - 2026-10-09 — feat(UI): the window rebuilt (Rules with editor, Test, Log), Lua moved to `lua_scripts/`, the server Lua is an empty stub; offline harness `tests/client_test.lua` (93 checks) — branch `claude/loot-filter-ui-22d6de83`.
 - 2026-10-09 — feat(Core): the core owns the rules (cache, only writer, no DB reads on loot), addon messages `LFLT`/`LFLS`, quest items protected, KEEP split from the new TO STORAGE, gold-cap check, statistics per batch, chat modes, startup migration of the old table, character deletion cleanup.
 - 2026-10-09 — feat(DB): rule + condition tables, settings gain `chatMode`/`totalStored`, `totalSold` BIGINT; `tests/schema_test.ps1`.

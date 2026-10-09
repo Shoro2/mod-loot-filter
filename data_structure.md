@@ -24,8 +24,8 @@ mod-loot-filter/
 │   └── mod_loot_filter_loader.cpp         # Addmod_loot_filterScripts()
 ├── tests/
 │   ├── build_offline.cmd                  # builds + runs rules_test and client_test (writes build/)
-│   ├── rules_test.cpp                     # LootFilterRules.h: 204 checks
-│   ├── client_test.lua                    # the window against a mocked FrameXML API: 93 checks
+│   ├── rules_test.cpp                     # LootFilterRules.h: 207 checks
+│   ├── client_test.lua                    # the window against a mocked FrameXML API: 100 checks
 │   ├── schema_test.ps1                    # the SQL twice on a scratch schema (workbench MySQL)
 │   └── loot_filter.tbs                    # mod-fl-testbots scenario: rules, loot, actions (T1)
 ├── include.sh                             # Build integration (registers SQL paths)
