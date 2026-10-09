@@ -38,7 +38,7 @@ local ACTIONS = {
 	[3] = { label = "Delete", badge = "DELETE", color = "ff5a5a", border = { 0.49, 0.15, 0.15 },
 		help = "Destroyed. This cannot be undone." },
 	[4] = { label = "To storage", badge = "TO STORAGE", color = "4fd6d6", border = { 0.16, 0.42, 0.42 },
-		help = "Trade goods, gems, recipes and stackable food go to the Endless Storage; anything else stays in your bags." },
+		help = "Trade goods, gems, recipes and food go to the Endless Storage; the rest stays." },
 	[5] = { label = "No rule", badge = "NO RULE", color = "9a9ab0", border = { 0.23, 0.24, 0.33 } },
 	[6] = { label = "Protected", badge = "PROTECTED", color = "9a9ab0", border = { 0.23, 0.24, 0.33 } },
 }
@@ -491,13 +491,19 @@ local function Tooltip(frame, title, line)
 	frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
-local function IconButton(parent, texture, tip)
+local function IconButton(parent, texture, tip, crop)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(20, 20)
 	b:SetNormalTexture(texture .. "-Up")
 	b:SetPushedTexture(texture .. "-Down")
 	b:SetDisabledTexture(texture .. "-Disabled")
 	b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+	if crop then
+		-- the scroll arrows sit small in the middle of their texture
+		for _, t in ipairs({ b:GetNormalTexture(), b:GetPushedTexture(), b:GetDisabledTexture() }) do
+			if t then t:SetTexCoord(0.2, 0.8, 0.2, 0.8) end
+		end
+	end
 	Tooltip(b, tip)
 	return b
 end
@@ -520,6 +526,7 @@ end
 local function Dropdown(name, parent, width)
 	local dd = CreateFrame("Frame", name, parent, "UIDropDownMenuTemplate")
 	UIDropDownMenu_SetWidth(dd, width)
+	UIDropDownMenu_JustifyText(dd, "LEFT")
 	return dd
 end
 
@@ -684,9 +691,9 @@ for i = 1, VISIBLE_RULES do
 	row.badge = BadgeFrame(row, 84)
 	row.badge:SetPoint("LEFT", 364, 0)
 
-	row.up = IconButton(row, "Interface\\Buttons\\UI-ScrollBar-ScrollUpButton", "Move up")
+	row.up = IconButton(row, "Interface\\Buttons\\UI-ScrollBar-ScrollUpButton", "Move up", true)
 	row.up:SetPoint("LEFT", 452, 0)
-	row.down = IconButton(row, "Interface\\Buttons\\UI-ScrollBar-ScrollDownButton", "Move down")
+	row.down = IconButton(row, "Interface\\Buttons\\UI-ScrollBar-ScrollDownButton", "Move down", true)
 	row.down:SetPoint("LEFT", row.up, "RIGHT", 0, 0)
 	row.edit = IconButton(row, "Interface\\Buttons\\UI-GuildButton-PublicNote", "Edit")
 	row.edit:SetPoint("LEFT", row.down, "RIGHT", 4, 0)

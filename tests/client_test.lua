@@ -109,6 +109,7 @@ UIDROPDOWNMENU_MENU_LEVEL = 1
 UIDROPDOWNMENU_MENU_VALUE = nil
 
 function UIDropDownMenu_SetWidth() end
+function UIDropDownMenu_JustifyText() end
 local initCalls = 0
 function UIDropDownMenu_Initialize(dd, fn) dd.init = fn; initCalls = initCalls + 1 end
 function UIDropDownMenu_SetText(dd, text) dd.ddtext = text end
