@@ -55,8 +55,8 @@ src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migratio
 | Name contains (7) | text ≤ 40 chars, letters/digits/space/`'-.,`, case-insensitive, `Name1` |
 
 Actions: **0 Keep** (stays, no deposit) · **1 Sell** · **2 Disenchant** (mats to the Endless Storage) ·
-**3 Delete** · **4 To storage** (storage-eligible items deposited, others stay). Sell price 0, not
-disenchantable, not storable, or the gold cap → the item is kept instead.
+**3 Delete** · **4 To storage** (storage-eligible items deposited, others stay). Sell price 0, the gold
+cap, or not disenchantable → stored if storage-eligible, else kept (the first version's fallback).
 
 ## Configuration
 

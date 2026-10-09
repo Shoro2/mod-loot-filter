@@ -674,6 +674,9 @@ namespace LootFilterRules
                 ++result.dropped;
                 continue;
             }
+            // Switching a KEEP off would widen every rule below it, so the
+            // "March UI" check below only switches destructive rules off.
+            bool const protective = first.action == ACTION_KEEP;
 
             // 3. Conditions in row order. Class rows become item-type
             // conditions; subclass rows are joined afterwards. Anything that
@@ -693,8 +696,10 @@ namespace LootFilterRules
                         c.type = r.type;
                         if (!ConvertOp(r.op, r.value, c.op, c.value))
                             enabled = false;
-                        // The March UI stored "below" as '=' for these two.
-                        if (r.op == 0 && r.type != COND_QUALITY)
+                        // The March UI stored "below" as '=' for these two;
+                        // the rule is kept as it behaves today, and a
+                        // destructive one is switched off for review.
+                        if (r.op == 0 && r.type != COND_QUALITY && !protective)
                             enabled = false;
                         uint32 const cap = r.type == COND_QUALITY ? MAX_QUALITY
                             : r.type == COND_ITEM_LEVEL ? MAX_ITEM_LEVEL

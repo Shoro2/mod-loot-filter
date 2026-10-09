@@ -479,6 +479,14 @@ static void TestMigrationEdges()
     MigrationResult m = MigrateCharacter({ Row(9, 1, 0, 0, 2, 0, "", 3, 5, true) });
     CHECK(m.rules.size() == 1 && !m.rules[0].enabled && m.disabled == 1);
 
+    // A KEEP saved by the March UI with '=' stays on (switching it off
+    // would widen the rules below it); a SELL with '=' is switched off.
+    m = MigrateCharacter({ Row(9, 1, 0, 1, 0, 50, "", 0, 5, true),
+        Row(9, 2, 0, 2, 0, 100, "", 1, 6, true) });
+    CHECK(m.rules.size() == 2 && m.rules[0].enabled && !m.rules[1].enabled);
+    CHECK(SameConds(m.rules[0].conditions, { Cond(COND_ITEM_LEVEL, OP_IS, 50) }));
+    CHECK(m.disabled == 1);
+
     // "> v" becomes "at least v+1"; "< v" becomes "at most v-1".
     m = MigrateCharacter({ Row(9, 1, 0, 2, 1, 999, "", 3, 5, true),
         Row(9, 2, 0, 0, 2, 3, "", 1, 6, true) });

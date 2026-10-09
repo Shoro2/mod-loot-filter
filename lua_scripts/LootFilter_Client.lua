@@ -381,15 +381,21 @@ function LF.OnMessage(msg)
 		M.rules = M.incoming or {}
 		M.incoming = nil
 		table.sort(M.rules, function(a, b) return a.position < b.position end)
-	elseif kind == "T" and #f == 5 then
+	elseif kind == "T" and #f >= 5 then
 		M.test = { bag = tonumber(f[2]), slot = tonumber(f[3]), result = tonumber(f[4]),
-			position = tonumber(f[5]) }
-	elseif kind == "S" and #f == 5 then
+			position = tonumber(f[5]), entry = tonumber(f[6]) }
+		M.testPending = false
+	elseif kind == "S" and #f >= 5 then
+		if M.scan.fresh then
+			M.scan.items, M.scan.counts, M.scan.fresh = {}, {}, false
+		end
 		local result = tonumber(f[4])
 		M.scan.items[#M.scan.items + 1] = { bag = tonumber(f[2]), slot = tonumber(f[3]), result = result,
-			position = tonumber(f[5]) }
+			position = tonumber(f[5]), entry = tonumber(f[6]) }
 		M.scan.counts[result] = (M.scan.counts[result] or 0) + 1
 	elseif kind == "Z" then
+		if M.scan.fresh then M.scan.items, M.scan.counts = {}, {} end
+		M.scan.fresh = false
 		M.scan.done = true
 		M.scan.running = false
 	elseif kind == "L" and #f == 8 then
@@ -422,6 +428,14 @@ function LF.OnMessage(msg)
 		M.enabled = f[2] == "1"
 	elseif kind == "!" then
 		local code = f[2] or ""
+		-- A refused request leaves nothing pending: the last results stay.
+		if M.scan.running then
+			M.scan.running, M.scan.fresh = false, false
+		end
+		if M.testPending then
+			M.testPending = false
+			M.testLink = nil
+		end
 		SetStatus(ERRORS[code] or ("Error: " .. code))
 		if code == "notfound" then LF.Send("G") end
 		return
@@ -828,6 +842,23 @@ LF.DefaultCond = DefaultCond
 
 local RenderEditor -- forward
 
+UIDropDownMenu_Initialize(posDropdown, function()
+	local rule = E.rule
+	if not rule then return end
+	local last = rule.id == 0 and (#M.rules + 1) or #M.rules
+	for p = 1, last do
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = tostring(p)
+		info.checked = rule.position == p
+		info.func = function()
+			rule.position = p
+			RenderEditor()
+		end
+		UIDropDownMenu_AddButton(info)
+	end
+end)
+
+
 local function ItemIdFromLink(link)
 	if type(link) ~= "string" then return nil end
 	local id = string.match(link, "item:(%d+)")
@@ -1131,18 +1162,6 @@ RenderEditor = function()
 	editorTitle:SetText(rule.id == 0 and "New rule" or ("Edit rule " .. rule.position))
 	UIDropDownMenu_SetText(posDropdown, tostring(rule.position))
 	posOf:SetText("of " .. last)
-	UIDropDownMenu_Initialize(posDropdown, function()
-		for p = 1, last do
-			local info = UIDropDownMenu_CreateInfo()
-			info.text = tostring(p)
-			info.checked = rule.position == p
-			info.func = function()
-				rule.position = p
-				RenderEditor()
-			end
-			UIDropDownMenu_AddButton(info)
-		end
-	end)
 
 	for i, row in ipairs(condRows) do
 		local c = rule.conds[i]
@@ -1306,7 +1325,10 @@ if not LootFilterUI_PickHooked then
 	LootFilterUI_PickHooked = true
 end
 function LF.OnPickup(bag, slot)
-	lastPick = { bag = bag, slot = slot }
+	-- Only the backpack and the four bags can be tested (not bank or keyring).
+	if type(bag) == "number" and bag >= 0 and bag <= 4 then
+		lastPick = { bag = bag, slot = slot }
+	end
 end
 
 -- Finds the bag slot that holds this exact link.
@@ -1324,11 +1346,12 @@ end
 
 function LF.TestBagSlot(bag, slot)
 	if bag == nil or slot == nil then
-		SetStatus(ERRORS.noitem)
+		SetStatus("Only items in your bags can be tested.")
 		return
 	end
 	M.testLink = GetContainerItemLink(bag, slot)
 	M.test = nil
+	M.testPending = true
 	LF.Send("T|" .. bag .. "|" .. slot)
 	Refresh()
 end
@@ -1391,7 +1414,9 @@ end
 
 LF.scanButton = scanBtn
 scanBtn:SetScript("OnClick", function()
-	M.scan = { items = {}, counts = {}, done = false, running = true }
+	-- The last results stay until the first answer arrives.
+	M.scan.running = true
+	M.scan.fresh = true
 	LF.Send("S")
 	Refresh()
 end)
@@ -1628,7 +1653,9 @@ Refresh = function()
 	statusText:SetText(M.status or "")
 	if not main:IsShown() then return end
 	if activeTab == 1 then
-		if E.rule then RenderEditor() else UpdateRuleList() end
+		-- The editor holds the player's unsaved input and open menus: an
+		-- incoming message (every looted item sends one) must not redraw it.
+		if not E.rule then UpdateRuleList() end
 	elseif activeTab == 2 then
 		UpdateTest()
 		UpdateScanList()

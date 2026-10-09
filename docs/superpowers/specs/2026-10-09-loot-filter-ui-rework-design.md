@@ -67,8 +67,9 @@ filtering, localisation (the client and every FL window are enUS), the three opt
   match → the item stays.
 - Actions: KEEP = stays in the bags (no deposit any more); TO STORAGE = deposited into
   `custom_endless_storage` when storage-eligible (unchanged predicate), otherwise stays; SELL,
-  DISENCHANT, DELETE unchanged, including today's fallbacks (sell price 0 → kept, not disenchantable →
-  kept).
+  DISENCHANT, DELETE unchanged, including today's fallbacks: sell price 0 (and the new gold-cap check) or
+  not disenchantable → what the first version's KeepItem did, i.e. stored when storage-eligible, else
+  kept (review finding, 2026-10-09).
 - Operators: is (=), at least (≥), at most (≤) for quality, item level and sell price; "is" for item
   type, cursed and item; "contains" (case-insensitive, `Name1`) for name.
 - Chat output per character: 0 = every action (with item links), 1 = one summary per loot batch

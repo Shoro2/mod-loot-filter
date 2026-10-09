@@ -395,6 +395,20 @@ namespace
     // Startup: migrate the old one-condition table once
     // ------------------------------------------------------------
 
+    // One above every rule id in use, condition rows included, so a row
+    // written by hand cannot collide with the next new rule.
+    uint32 NextFreeRuleId()
+    {
+        uint32 last = 0;
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT GREATEST("
+            "(SELECT COALESCE(MAX(ruleId), 0) FROM character_loot_filter_rule), "
+            "(SELECT COALESCE(MAX(ruleId), 0) FROM "
+            "character_loot_filter_condition)) AS lastId"))
+            last = static_cast<uint32>(result->Fetch()[0].Get<uint64>());
+        return last + 1;
+    }
+
     bool TableExists(char const* table)
     {
         return CharacterDatabase.Query(
@@ -455,6 +469,11 @@ namespace
             } while (result->NextRow());
         }
 
+        // The rule table is empty, so every condition row is an orphan of an
+        // earlier attempt and would collide with the new ids.
+        CharacterDatabase.DirectExecute(
+            "DELETE FROM character_loot_filter_condition");
+
         uint32 nextId = 1;
         uint32 rules = 0;
         uint32 disabled = 0;
@@ -489,6 +508,19 @@ namespace
             }
         }
         CharacterDatabase.DirectCommitTransaction(trans);
+
+        // A failed commit only logs, so count before the old table goes.
+        uint64 stored = 0;
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT COUNT(*) AS n FROM character_loot_filter_rule"))
+            stored = result->Fetch()[0].Get<uint64>();
+        if (stored != rules)
+        {
+            LOG_ERROR("module", "mod-loot-filter: the migration wrote {} of {} "
+                "rule(s); character_loot_filter is left in place for another "
+                "attempt at the next start", stored, rules);
+            return;
+        }
         CharacterDatabase.DirectExecute("RENAME TABLE character_loot_filter "
             "TO character_loot_filter_legacy");
 
@@ -676,7 +708,9 @@ namespace
                 line = "Deleted " + link + CountSuffix(count) + ".";
                 break;
             case LFR::ACTION_STORE:
-                line = "Stored " + link + CountSuffix(count) + ".";
+                line = "Stored " + link + CountSuffix(count)
+                    + (why ? std::string(" (") + why + ")" : std::string())
+                    + ".";
                 break;
             default:
                 line = "Kept " + link + CountSuffix(count)
@@ -700,33 +734,37 @@ namespace
         char const* why = nullptr;
         std::vector<std::pair<uint32, uint32>> mats;
 
+        // The fallback of the first version's KeepItem: storage-eligible
+        // items go to the Endless Storage, anything else stays in the bags.
+        auto storeOrKeep = [&](char const* keptWhy, char const* storedWhy)
+        {
+            if (IsStorageEligible(proto))
+            {
+                DepositToStorage(guid, proto, count);
+                player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                outcome = LFR::ACTION_STORE;
+                why = storedWhy;
+            }
+            else
+            {
+                outcome = LFR::ACTION_KEEP;
+                why = keptWhy;
+            }
+        };
+
         switch (action)
         {
             case LFR::ACTION_STORE:
-                if (IsStorageEligible(proto))
-                {
-                    DepositToStorage(guid, proto, count);
-                    player->DestroyItem(item->GetBagSlot(), item->GetSlot(),
-                        true);
-                }
-                else
-                {
-                    outcome = LFR::ACTION_KEEP;
-                    why = "cannot be stored";
-                }
+                storeOrKeep("cannot be stored", nullptr);
                 break;
             case LFR::ACTION_SELL:
                 money = uint64(proto->SellPrice) * count;
                 if (!money)
-                {
-                    outcome = LFR::ACTION_KEEP;
-                    why = "no vendor price";
-                }
+                    storeOrKeep("no vendor price", "no vendor price");
                 else if (uint64(player->GetMoney()) + money > MAX_MONEY_AMOUNT)
                 {
-                    outcome = LFR::ACTION_KEEP;
-                    why = "gold limit";
                     money = 0;
+                    storeOrKeep("gold limit", "gold limit");
                 }
                 else
                 {
@@ -737,10 +775,8 @@ namespace
                 break;
             case LFR::ACTION_DISENCHANT:
                 if (!proto->DisenchantID)
-                {
-                    outcome = LFR::ACTION_KEEP;
-                    why = "cannot be disenchanted";
-                }
+                    storeOrKeep("cannot be disenchanted",
+                        "cannot be disenchanted");
                 else
                 {
                     mats = Disenchant(player, proto);
@@ -843,8 +879,8 @@ namespace
             uint32 cslot = 0;
             if (!item || !LFR::ServerToClient(bag, slot, cbag, cslot))
                 return;
-            out(Acore::StringFormat("S|{}|{}|{}", cbag, cslot,
-                VerdictText(st, item)));
+            out(Acore::StringFormat("S|{}|{}|{}|{}", cbag, cslot,
+                VerdictText(st, item), item->GetEntry()));
             ++count;
         };
 
@@ -1012,8 +1048,8 @@ namespace
                     out("!|noitem");
                     break;
                 }
-                out(Acore::StringFormat("T|{}|{}|{}", a, b,
-                    VerdictText(st, item)));
+                out(Acore::StringFormat("T|{}|{}|{}|{}", a, b,
+                    VerdictText(st, item), item->GetEntry()));
                 break;
             }
             case 'S':
@@ -1067,10 +1103,7 @@ public:
     void OnStartup() override
     {
         MigrateLegacyTable();
-        if (QueryResult result = CharacterDatabase.Query(
-            "SELECT COALESCE(MAX(ruleId), 0) AS lastId "
-            "FROM character_loot_filter_rule"))
-            s_nextRuleId = result->Fetch()[0].Get<uint32>() + 1;
+        s_nextRuleId = NextFreeRuleId();
     }
 };
 
@@ -1193,6 +1226,9 @@ public:
         uint32 const guid = player->GetGUID().GetCounter();
         FilterState st = LoadState(guid);
         std::size_t rules = 0;
+        uint32 const next = NextFreeRuleId();
+        if (next > s_nextRuleId)
+            s_nextRuleId = next;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
             FilterState& slot = s_states[guid];

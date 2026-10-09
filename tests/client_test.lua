@@ -109,7 +109,8 @@ UIDROPDOWNMENU_MENU_LEVEL = 1
 UIDROPDOWNMENU_MENU_VALUE = nil
 
 function UIDropDownMenu_SetWidth() end
-function UIDropDownMenu_Initialize(dd, fn) dd.init = fn end
+local initCalls = 0
+function UIDropDownMenu_Initialize(dd, fn) dd.init = fn; initCalls = initCalls + 1 end
 function UIDropDownMenu_SetText(dd, text) dd.ddtext = text end
 function UIDropDownMenu_CreateInfo() return {} end
 function UIDropDownMenu_AddButton(info) menuItems[#menuItems + 1] = info end
@@ -292,6 +293,12 @@ LF.OpenEditor(nil)
 local E = LF.E
 check(E.rule and E.rule.id == 0 and #E.rule.conds == 1 and E.rule.position == 3, "new rule")
 check(LF.editorFrame:IsShown(), "editor shown")
+local callsBefore = initCalls
+E.rule.conds[1].value = 4
+LF.OnMessage("L|1|1001|0|1|40|1|")
+check(initCalls == callsBefore and E.rule.conds[1].value == 4, "incoming messages leave the editor alone")
+E.rule.conds[1].value = 2
+M.log, M.session.soldItems, M.session.money, M.totals.sold = {}, 0, 0, 123456
 LF.actionRadios[1].scripts.OnClick()
 check(E.rule.action == 1, "pick sell")
 check(LF.actionRadios[1]:GetChecked() == 1 and LF.actionRadios[0]:GetChecked() == nil, "radio state")
@@ -376,10 +383,24 @@ check(M.test.result == 6, "protected result")
 
 LF.scanButton.scripts.OnClick()
 check(last() == "S" and M.scan.running, "check my bags")
-LF.OnMessage("S|0|3|2|1")
-LF.OnMessage("S|0|4|5|0")
+LF.OnMessage("S|0|3|2|1|1001")
+LF.OnMessage("S|0|4|5|0|1002")
 LF.OnMessage("Z|2")
 check(M.scan.done and M.scan.counts[2] == 1 and M.scan.counts[5] == 1, "scan results")
+check(M.scan.items[1].entry == 1001, "scan rows carry the item")
+LF.scanButton.scripts.OnClick()
+LF.OnMessage("!|busy")
+check(not M.scan.running and #M.scan.items == 2, "a refused scan keeps the last results")
+LF.scanButton.scripts.OnClick()
+LF.OnMessage("Z|0")
+check(M.scan.done and #M.scan.items == 0, "empty bags clear the list")
+LF.TestBagSlot(0, 9)
+check(last() == "T|0|9" and M.testPending, "test request pending")
+LF.OnMessage("!|noitem")
+check(not M.testPending and M.testLink == nil and has(M.status, "empty"), "a refused test ends the wait")
+hooks.PickupContainerItem(-1, 3)
+bags[0][5] = Link(1002)
+check(select(1, LF.FindBagSlot(Link(1002))) == 0, "bank pickups are not remembered")
 
 -- ------------------------------------------------------------
 -- Log tab

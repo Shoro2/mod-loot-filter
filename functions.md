@@ -43,8 +43,8 @@ case-insensitive substring of `Name1`.
 |---|---|---|
 | 0 Keep | nothing | — |
 | 4 To storage | `custom_endless_storage` += count, item destroyed | not storage-eligible (recipe; stackable food; stackable trade goods or gem) |
-| 1 Sell | money += SellPrice × count, item destroyed | sell price 0; the money would pass `MAX_MONEY_AMOUNT` |
-| 2 Disenchant | `LootTemplates_Disenchant` rolled; storable mats to the storage, the rest to the bags (mail if full); item destroyed | `DisenchantID` 0 |
+| 1 Sell | money += SellPrice × count, item destroyed | sell price 0 or the money would pass `MAX_MONEY_AMOUNT` → **stored if storage-eligible**, else kept |
+| 2 Disenchant | `LootTemplates_Disenchant` rolled; storable mats to the storage, the rest to the bags (mail if full); item destroyed | `DisenchantID` 0 → **stored if storage-eligible**, else kept |
 | 3 Delete | item destroyed | — |
 
 The action acts on the item the loot hook reports, i.e. the whole stack the loot merged into (unchanged
@@ -81,8 +81,8 @@ a rule is `id|position|action|enabled|conditions`.
 |---|---|
 | `I|enabled|chatMode|maxRules|allowSell|allowDE|allowDel|sold|de|del|stored` | settings, limits, totals |
 | `R|…` per rule, then `N|count` | the rule list (the client swaps it in on `N`) |
-| `T|bag|slot|result|position` | test result: 0-4 action, 5 no rule, 6 protected |
-| `S|bag|slot|result|position` per item, then `Z|count` | bag scan |
+| `T|bag|slot|result|position|entry` | test result: 0-4 action, 5 no rule, 6 protected |
+| `S|bag|slot|result|position|entry` per item, then `Z|count` | bag scan |
 | `L|action|entry|suffix|count|money|position|entry:count,…` | one action happened |
 | `F|on` | filter state (also after `.lootfilter toggle`) |
 | `!|code` | `limit`, `invalid`, `action`, `notfound`, `busy`, `noitem`, `disabled` |
@@ -94,8 +94,11 @@ slot 18+b, slot n-1.
 
 Runs while `character_loot_filter` exists. If `character_loot_filter_rule` already has rows the old table
 is only renamed; if `character_loot_filter_legacy` already exists nothing happens (error logged). Otherwise
-the old rows are read per character, `MigrateCharacter()` builds the rules, one transaction inserts them,
-then `RENAME TABLE character_loot_filter TO character_loot_filter_legacy`. Log line:
+orphan condition rows are deleted, the old rows are read per character, `MigrateCharacter()` builds the
+rules, one transaction inserts them, the rule count is checked (a failed commit only logs, so a mismatch
+leaves the old table in place for the next start), then `RENAME TABLE character_loot_filter TO
+character_loot_filter_legacy`. New rule ids come from a counter set at startup (and raised by
+`.lootfilter reload`) to one above every id in the rule and condition tables. Log line:
 `mod-loot-filter: migrated N rule(s) of M character(s) … (X switched off for review, Y dropped)`.
 
 `MigrateCharacter`: standalone row = one rule; group = one rule from its enabled rows (all rows, switched
@@ -104,7 +107,8 @@ lowest rule id; `>` v → at least v+1, `<` v → at most v-1; class + subclass 
 condition, a lone subclass → weapon (old client label) or armor; old KEEP on trade goods / gems / recipes /
 consumables → TO STORAGE. Switched off for review: anything not expressible exactly (operator on class,
 subclass or item, odd or long names, more than four conditions, `< 0`) and **item level / sell price rows
-with '='**, which the March 2026 UI saved for "below".
+with '='** in SELL / DISENCHANT / DELETE rules, which the March 2026 UI saved for "below" (a KEEP with
+'=' stays on as it behaves today: switching a KEEP off would widen every rule below it).
 
 ## Commands
 
