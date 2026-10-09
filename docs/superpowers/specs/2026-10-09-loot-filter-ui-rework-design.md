@@ -156,10 +156,10 @@ client UI (Lua, shipped by AIO) ──addon "LFLT"──▶ C++ (the only owner)
 - The server Lua becomes a stub that keeps its file name, so a deploy overwrites the old AIO handlers
   instead of leaving them live (the host policy never deletes). The client file registers itself with
   `AIO.AddAddon()`.
-- The Lua moves into `mod-loot-filter/lua_scripts/` and becomes module-owned:
-  `fl_host_sync_policy.json` gains `"LootFilter": "mod-loot-filter"`, `fl-lua-scripts` ignores
-  `LootFilter/` (like Dungeon_Challenge and Storage), and the workbench copy is deployed from the module
-  checkout.
+- The Lua moves into `mod-loot-filter/lua_scripts/`. *Changed at T1 (2026-10-09):* the deployed copy stays
+  fl-lua-scripts' `LootFilter/` (workbench-owned in `fl_host_sync_policy.json`) and is updated in the same
+  task, because who owns Lua that a module repo also carries is an open owner decision (vault queue §4);
+  making it module-owned is one policy line once that is decided.
 - The summary chat mode is the loot-filter half of the mass-pull plan's F11.
 
 ## 7. Testing
@@ -178,7 +178,7 @@ client UI (Lua, shipped by AIO) ──addon "LFLT"──▶ C++ (the only owner)
 ## 8. Rollout
 
 Workbench first (build coordinated with the CoA round-4 window), merge to `main`, push. Host: one MIG
-entry — module pull + rebuild (the updater applies the SQL at boot), the two Lua files deployed from the
-module checkout into `lua_scripts/LootFilter/`, the policy change. No `ClientCacheVersion` bump (no
+entry — module pull + rebuild (the updater applies the SQL at boot), the two Lua files from the
+workbench copy (`fl_host_sync.py`, as for every workbench-owned Lua folder). No `ClientCacheVersion` bump (no
 cached template changes). Vault: module docs, `05-modules.md`, `09-db-tables.md`, the mass-pull row in
 `12-server-todo.md` (F1 and the loot-filter half of F11 done here), `claude_log.md`.

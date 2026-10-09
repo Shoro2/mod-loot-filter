@@ -25,8 +25,9 @@ src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migratio
   on loot**. Out-of-band SQL needs `.lootfilter reload`.
 - `lua_scripts/LootFilter_Server.lua` is an empty stub on purpose (it overwrites the pre-2026-10 AIO
   handlers on deploy; the host deploy never deletes).
-- **Deploy**: the module owns its Lua (`fl_host_sync_policy.json` → `module_owned`); the files go to
-  `lua_scripts/LootFilter/` on the workbench and the host. `fl-lua-scripts` no longer tracks `LootFilter/`.
+- **Deploy**: the source is `lua_scripts/` here; the deployed copy is fl-lua-scripts' `LootFilter/` (the
+  workbench's `lua_scripts\LootFilter\`, synced to the host by `fl_host_sync.py`). Until the owner decides
+  who owns such Lua (vault queue §4), every change updates both copies in the same task.
 
 ## Custom data
 

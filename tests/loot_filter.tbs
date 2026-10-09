@@ -2,21 +2,23 @@
 # the same handler the addon messages reach), loot through mod-auto-loot, and what each action
 # leaves in the bags. Server-side test bot run (mod-fl-testbots), T1.
 #
-# Wild Turkey (32820, Goldshire) drops exactly one Wild Turkey (44834: white, trade goods / meat,
-# stack 20, sells for 15c - storage-eligible). The bot kills each turkey next to itself with Death
-# Touch (5); mod-auto-loot (10 yd, every 250 ms) loots it for the bot, and the filter acts one tick
-# later. A looted corpse is gone about 3 s later (mod-auto-loot halves its time on every scan), so
-# the next `pick` finds a living turkey. A loot that merges into a stack acts on the whole stack
-# (unchanged behaviour).
+# Snapjaw (2408, the Hillsbrad river, always spawned) drops exactly one Turtle Meat (3712: white,
+# trade goods / meat, stack 20, sells for 87c, no disenchant loot - storage-eligible); Rot Hide
+# Brute (1939, Silverpine) always drops A Talking Head (3317: a white quest item, class 12, unique).
+# (Wild Turkey 32820 was the first choice; its spawns belong to Pilgrim's Bounty.) The bot kills
+# each creature next to itself with Death Touch (5); mod-auto-loot (10 yd, every 250 ms) loots it
+# for the bot, and the filter acts one tick later. A looted corpse is gone about 3 s later
+# (mod-auto-loot halves its time on every scan), so the next `pick` finds a living one. A loot that
+# merges into a stack acts on the whole stack (unchanged behaviour).
 #   b  one level-80 warrior; its rules are cleared at the start and at the end
 name    mod-loot-filter - rules, loot, actions
 timeout 240s
 
 bot b warrior
 
-place 0 -9449 64 56.6
+place 0 -147.4 -1122.5 35
 require b alive
-do b destroy 44834
+do b destroy 3712
 as b .lootfilter request X
 expect output has "LFLS N|0"
 as b .lootfilter request F|1
@@ -24,19 +26,19 @@ expect output has "LFLS F|1"
 as b .lootfilter request C|2
 expect output has "LFLS I|1|2|"
 
-log 1 - a rule with two conditions sells the turkey (white AND trade goods / meat)
+log 1 - a rule with two conditions sells the meat (white AND trade goods / meat)
 as b .lootfilter request R|0|0|1|1|0:0:1:0:;3:0:7:8:
 expect output has "LFLS R|"
 expect output has "|1|1|1|0:0:1:0:;3:0:7:8:"
 expect output has "LFLS N|1"
-pick t1 creature:32820 near b
+pick t1 creature:2408 near b
 require t1 alive
 do b approach t1
 do b cast 5 on t1 triggered
 waitfor t1 dead timeout 5s
 wait 2s
 waitfor t1 missing timeout 15s
-expect b item 44834 == 0
+expect b item 3712 == 0
 as b .lootfilter stats
 expect output has "Rules: 1"
 expect output has "Gold earned"
@@ -45,14 +47,14 @@ log 2 - TO STORAGE deposits it (the type condition with any subclass)
 as b .lootfilter request X
 as b .lootfilter request R|0|0|4|1|3:0:7:255:
 expect output has "LFLS N|1"
-pick t2 creature:32820 near b
+pick t2 creature:2408 near b
 require t2 alive
 do b approach t2
 do b cast 5 on t2 triggered
 waitfor t2 dead timeout 5s
 wait 2s
 waitfor t2 missing timeout 15s
-expect b item 44834 == 0
+expect b item 3712 == 0
 log 2b - what the core wrote reads back from the DB (the rule and the statistics batch)
 as b .lootfilter reload
 expect output has "Rules reloaded (1 rules)"
@@ -64,76 +66,89 @@ expect output value Stored >= 1
 
 log 2c - DISENCHANT on an item without disenchant loot stores it, as the old fallback did
 as b .lootfilter request X
-as b .lootfilter request R|0|0|2|1|6:0:44834:0:
-pick t7 creature:32820 near b
+as b .lootfilter request R|0|0|2|1|6:0:3712:0:
+pick t7 creature:2408 near b
 require t7 alive
 do b approach t7
 do b cast 5 on t7 triggered
 waitfor t7 dead timeout 5s
 wait 2s
 waitfor t7 missing timeout 15s
-expect b item 44834 == 0
+expect b item 3712 == 0
 
-log 3 - KEEP leaves it in the bags (no deposit any more)
+log 3 - KEEP leaves the meat in the bags (no deposit any more)
 as b .lootfilter request X
 as b .lootfilter request R|0|0|0|1|3:0:7:255:
-pick t3 creature:32820 near b
+pick t3 creature:2408 near b
 require t3 alive
 do b approach t3
 do b cast 5 on t3 triggered
 waitfor t3 dead timeout 5s
 wait 2s
 waitfor t3 missing timeout 15s
-expect b item 44834 == 1
+expect b item 3712 == 1
 
-log 4 - the bag scan acts on nothing and names the KEEP rule for the turkey
+log 4 - the bag scan acts on nothing and names the KEEP rule for the meat
 as b .lootfilter request S
 expect output has "LFLS S|"
-expect output has "|0|1|44834"
+expect output has "|0|1|3712"
 expect output has "LFLS Z|"
-expect b item 44834 == 1
+expect b item 3712 == 1
 
 log 5 - a switched-off KEEP on top does not protect; DELETE takes the whole stack
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
-as b .lootfilter request R|0|1|0|0|6:0:44834:0:
+as b .lootfilter request R|0|1|0|0|6:0:3712:0:
 expect output has "LFLS N|2"
 expect output has "LFLS R|"
-pick t4 creature:32820 near b
+pick t4 creature:2408 near b
 require t4 alive
 do b approach t4
 do b cast 5 on t4 triggered
 waitfor t4 dead timeout 5s
 wait 2s
 waitfor t4 missing timeout 15s
-expect b item 44834 == 0
+expect b item 3712 == 0
 
-log 6 - the same KEEP switched on protects the turkey from the DELETE below it
+log 6 - the same KEEP switched on protects the meat from the DELETE below it
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
-as b .lootfilter request R|0|1|0|1|6:0:44834:0:
-pick t5 creature:32820 near b
+as b .lootfilter request R|0|1|0|1|6:0:3712:0:
+pick t5 creature:2408 near b
 require t5 alive
 do b approach t5
 do b cast 5 on t5 triggered
 waitfor t5 dead timeout 5s
 wait 2s
 waitfor t5 missing timeout 15s
-expect b item 44834 == 1
+expect b item 3712 == 1
 
 log 7 - filter off: nothing happens, even under a DELETE rule
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request F|0
 expect output has "LFLS F|0"
-pick t6 creature:32820 near b
+pick t6 creature:2408 near b
 require t6 alive
 do b approach t6
 do b cast 5 on t6 triggered
 waitfor t6 dead timeout 5s
 wait 2s
 waitfor t6 missing timeout 15s
-expect b item 44834 == 2
+expect b item 3712 == 2
+
+log 7b - a quest item is never touched, even under a DELETE rule
+as b .lootfilter request F|1
+place 0 705 610 45
+do b destroy 3317
+pick g1 creature:1939 near b
+require g1 alive
+do b approach g1
+do b cast 5 on g1 triggered
+waitfor g1 dead timeout 5s
+wait 2s
+waitfor g1 missing timeout 15s
+expect b item 3317 == 1
 
 log 8 - invalid requests are refused
 as b .lootfilter request R|0|0|9|1|0:0:1:0:
@@ -149,5 +164,6 @@ cleanup
 as b .lootfilter request X
 as b .lootfilter request F|1
 as b .lootfilter request C|1
-do b destroy 44834
+do b destroy 3712
+do b destroy 3317
 log loot_filter done
