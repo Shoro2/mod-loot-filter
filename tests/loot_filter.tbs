@@ -6,8 +6,10 @@
 # trade goods / meat, stack 20, sells for 87c, no disenchant loot - storage-eligible); Rot Hide
 # Brute (1939, Silverpine) always drops A Talking Head (3317: a white quest item, class 12, unique).
 # (Wild Turkey 32820 was the first choice; its spawns belong to Pilgrim's Bounty.) The bot kills
-# each creature next to itself with one Pyroblast (42891, 1210-1531 fire, cast server-side and
-# triggered; Death Touch 5 is refused with a custom cast error); mod-auto-loot (10 yd, every 250 ms) loots it
+# each creature next to itself with three Arcane Explosions (42921, 538-582 arcane within 10 yd,
+# cast server-side and triggered, needs no target and no facing - a Snapjaw has up to 1107 health;
+# Death Touch 5 is refused with a custom cast error and a targeted Pyroblast often failed "not in
+# front" on a moving Snapjaw); mod-auto-loot (10 yd, every 250 ms) loots it
 # for the bot, and the filter acts one tick later. A looted corpse is gone about 3 s later
 # (mod-auto-loot halves its time on every scan), so the next `pick` finds a living one. A loot that
 # merges into a stack acts on the whole stack (unchanged behaviour). Each kill happens at its own
@@ -40,7 +42,9 @@ pick t1 creature:2408 near b
 require t1 alive
 do b offset 6 6
 do b approach t1
-do b cast 42891 on t1 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t1 dead timeout 5s
 wait 2s
 waitfor t1 missing timeout 15s
@@ -58,7 +62,9 @@ pick t2 creature:2408 near b
 require t2 alive
 do b offset 6 6
 do b approach t2
-do b cast 42891 on t2 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t2 dead timeout 5s
 wait 2s
 waitfor t2 missing timeout 15s
@@ -80,7 +86,9 @@ pick t7 creature:2408 near b
 require t7 alive
 do b offset 6 6
 do b approach t7
-do b cast 42891 on t7 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t7 dead timeout 5s
 wait 2s
 waitfor t7 missing timeout 15s
@@ -94,7 +102,9 @@ pick t3 creature:2408 near b
 require t3 alive
 do b offset 6 6
 do b approach t3
-do b cast 42891 on t3 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t3 dead timeout 5s
 wait 2s
 waitfor t3 missing timeout 15s
@@ -118,7 +128,9 @@ pick t4 creature:2408 near b
 require t4 alive
 do b offset 6 6
 do b approach t4
-do b cast 42891 on t4 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t4 dead timeout 5s
 wait 2s
 waitfor t4 missing timeout 15s
@@ -133,7 +145,9 @@ pick t5 creature:2408 near b
 require t5 alive
 do b offset 6 6
 do b approach t5
-do b cast 42891 on t5 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t5 dead timeout 5s
 wait 2s
 waitfor t5 missing timeout 15s
@@ -149,7 +163,9 @@ pick t6 creature:2408 near b
 require t6 alive
 do b offset 6 6
 do b approach t6
-do b cast 42891 on t6 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor t6 dead timeout 5s
 wait 2s
 waitfor t6 missing timeout 15s
@@ -163,7 +179,9 @@ pick g1 creature:1939 near b
 require g1 alive
 do b offset 6 6
 do b approach g1
-do b cast 42891 on g1 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
 waitfor g1 dead timeout 5s
 wait 2s
 waitfor g1 missing timeout 15s
