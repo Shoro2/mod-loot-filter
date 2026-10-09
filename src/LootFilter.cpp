@@ -232,20 +232,35 @@ namespace
         player->GetSession()->SendPacket(&data);
     }
 
-    void SendSettings(Player* player, FilterState const& st)
+    // Where the answers to one request go: the window, and with `echo` also
+    // the chat of the command that made it (.lootfilter request).
+    struct Reply
     {
-        SendAddon(player, Acore::StringFormat("I|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        Player* player;
+        ChatHandler* echo;
+
+        void operator()(std::string const& message) const
+        {
+            SendAddon(player, message);
+            if (echo)
+                echo->SendSysMessage("LFLS " + message);
+        }
+    };
+
+    void SendSettings(Reply const& out, FilterState const& st)
+    {
+        out(Acore::StringFormat("I|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             st.filterEnabled ? 1 : 0, st.chatMode, conf_MaxRulesPerChar,
             conf_AllowSell ? 1 : 0, conf_AllowDisenchant ? 1 : 0,
             conf_AllowDelete ? 1 : 0, st.totalSold, st.totalDisenchanted,
             st.totalDeleted, st.totalStored));
     }
 
-    void SendRules(Player* player, FilterState const& st)
+    void SendRules(Reply const& out, FilterState const& st)
     {
         for (LFR::Rule const& rule : st.rules)
-            SendAddon(player, "R|" + LFR::EncodeRule(rule));
-        SendAddon(player, "N|" + std::to_string(st.rules.size()));
+            out("R|" + LFR::EncodeRule(rule));
+        out("N|" + std::to_string(st.rules.size()));
     }
 
     // ------------------------------------------------------------
@@ -819,7 +834,7 @@ namespace
         return std::to_string(v.result) + "|" + std::to_string(v.position);
     }
 
-    void ScanBags(Player* player, FilterState const& st)
+    void ScanBags(Reply const& out, Player* player, FilterState const& st)
     {
         uint32 count = 0;
         auto report = [&](uint8 bag, uint8 slot, Item const* item)
@@ -828,7 +843,7 @@ namespace
             uint32 cslot = 0;
             if (!item || !LFR::ServerToClient(bag, slot, cbag, cslot))
                 return;
-            SendAddon(player, Acore::StringFormat("S|{}|{}|{}", cbag, cslot,
+            out(Acore::StringFormat("S|{}|{}|{}", cbag, cslot,
                 VerdictText(st, item)));
             ++count;
         };
@@ -848,14 +863,16 @@ namespace
                 report(bagSlot, static_cast<uint8>(i),
                     bag->GetItemByPos(static_cast<uint8>(i)));
         }
-        SendAddon(player, "Z|" + std::to_string(count));
+        out("Z|" + std::to_string(count));
     }
 
-    void HandleRequest(Player* player, std::string const& payload)
+    void HandleRequest(Player* player, std::string const& payload,
+        ChatHandler* echo = nullptr)
     {
+        Reply const out{ player, echo };
         if (!conf_Enable)
         {
-            SendAddon(player, "!|disabled");
+            out("!|disabled");
             return;
         }
 
@@ -872,7 +889,7 @@ namespace
         FilterState& st = it->second;
         if (!TakeToken(st))
         {
-            SendAddon(player, "!|busy");
+            out("!|busy");
             return;
         }
 
@@ -881,20 +898,20 @@ namespace
         switch (cmd)
         {
             case 'G':
-                SendSettings(player, st);
-                SendRules(player, st);
+                SendSettings(out, st);
+                SendRules(out, st);
                 break;
             case 'R':
             {
                 LFR::Rule rule;
                 if (f.size() != 6 || !LFR::DecodeRule(f, 1, rule))
                 {
-                    SendAddon(player, "!|invalid");
+                    out("!|invalid");
                     break;
                 }
                 if (!(AllowedMask() & (1u << rule.action)))
                 {
-                    SendAddon(player, "!|action");
+                    out("!|action");
                     break;
                 }
                 uint32 const pos = rule.position;
@@ -902,7 +919,7 @@ namespace
                 {
                     if (st.rules.size() >= conf_MaxRulesPerChar)
                     {
-                        SendAddon(player, "!|limit");
+                        out("!|limit");
                         break;
                     }
                     rule.id = s_nextRuleId++;
@@ -913,7 +930,7 @@ namespace
                     LFR::Rule* existing = FindRule(st, rule.id);
                     if (!existing)
                     {
-                        SendAddon(player, "!|notfound");
+                        out("!|notfound");
                         break;
                     }
                     existing->action = rule.action;
@@ -923,29 +940,29 @@ namespace
                         LFR::Move(st.rules, rule.id, pos);
                 }
                 SaveRules(guid, st.rules);
-                SendRules(player, st);
+                SendRules(out, st);
                 break;
             }
             case 'D':
                 if (f.size() != 2 || !LFR::ParseUInt(f[1], 0xFFFFFFFFu, a)
                     || !LFR::Remove(st.rules, a))
                 {
-                    SendAddon(player, "!|notfound");
+                    out("!|notfound");
                     break;
                 }
                 SaveRules(guid, st.rules);
-                SendRules(player, st);
+                SendRules(out, st);
                 break;
             case 'M':
                 if (f.size() != 3 || !LFR::ParseUInt(f[1], 0xFFFFFFFFu, a)
                     || !LFR::ParseUInt(f[2], 255, b) || !b
                     || !LFR::Move(st.rules, a, b))
                 {
-                    SendAddon(player, "!|notfound");
+                    out("!|notfound");
                     break;
                 }
                 SaveRules(guid, st.rules);
-                SendRules(player, st);
+                SendRules(out, st);
                 break;
             case 'E':
             {
@@ -954,12 +971,12 @@ namespace
                     || !LFR::ParseUInt(f[2], 1, b)
                     || !(rule = FindRule(st, a)))
                 {
-                    SendAddon(player, "!|notfound");
+                    out("!|notfound");
                     break;
                 }
                 rule->enabled = b != 0;
                 SaveRules(guid, st.rules);
-                SendRules(player, st);
+                SendRules(out, st);
                 break;
             }
             case 'F':
@@ -967,7 +984,7 @@ namespace
                     break;
                 st.filterEnabled = a != 0;
                 SaveSettings(guid, st);
-                SendAddon(player, std::string("F|") + (a ? "1" : "0"));
+                out(std::string("F|") + (a ? "1" : "0"));
                 break;
             case 'C':
                 if (f.size() != 2
@@ -975,12 +992,12 @@ namespace
                     break;
                 st.chatMode = static_cast<uint8>(a);
                 SaveSettings(guid, st);
-                SendSettings(player, st);
+                SendSettings(out, st);
                 break;
             case 'X':
                 st.rules.clear();
                 SaveRules(guid, st.rules);
-                SendRules(player, st);
+                SendRules(out, st);
                 break;
             case 'T':
             {
@@ -992,10 +1009,10 @@ namespace
                     || !LFR::ClientToServer(a, b, bag, slot)
                     || !(item = player->GetItemByPos(bag, slot)))
                 {
-                    SendAddon(player, "!|noitem");
+                    out("!|noitem");
                     break;
                 }
-                SendAddon(player, Acore::StringFormat("T|{}|{}|{}", a, b,
+                out(Acore::StringFormat("T|{}|{}|{}", a, b,
                     VerdictText(st, item)));
                 break;
             }
@@ -1005,12 +1022,12 @@ namespace
                 if (st.scanned
                     && getMSTimeDiff(st.lastScan, now) < SCAN_INTERVAL_MS)
                 {
-                    SendAddon(player, "!|busy");
+                    out("!|busy");
                     break;
                 }
                 st.scanned = true;
                 st.lastScan = now;
-                ScanBags(player, st);
+                ScanBags(out, player, st);
                 break;
             }
             default:
@@ -1157,6 +1174,7 @@ public:
             { "reload", HandleReloadCmd, SEC_PLAYER, Console::No },
             { "toggle", HandleToggleCmd, SEC_PLAYER, Console::No },
             { "stats",  HandleStatsCmd,  SEC_PLAYER, Console::No },
+            { "request", HandleRequestCmd, SEC_PLAYER, Console::No },
         };
         static ChatCommandTable commandTable =
         {
@@ -1181,8 +1199,9 @@ public:
             st.batch = slot.batch;
             slot = std::move(st);
             rules = slot.rules.size();
-            SendSettings(player, slot);
-            SendRules(player, slot);
+            Reply const out{ player, nullptr };
+            SendSettings(out, slot);
+            SendRules(out, slot);
         }
         handler->PSendSysMessage("{}Rules reloaded ({} rules).", CHAT_TAG,
             rules);
@@ -1208,6 +1227,21 @@ public:
         SendAddon(player, enabled ? "F|1" : "F|0");
         handler->PSendSysMessage("{}Filter {}.", CHAT_TAG,
             enabled ? "enabled" : "disabled");
+        return true;
+    }
+
+    // The window's protocol as a chat command: the same handler, limits and
+    // validation, with the answers also printed ("LFLS <message>"). For test
+    // bots and debugging; a player gains nothing the window cannot do.
+    static bool HandleRequestCmd(ChatHandler* handler, Tail payload)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+        std::string const request(payload);
+        if (request.empty() || request.size() > LFR::MAX_MESSAGE)
+            return false;
+        HandleRequest(player, request, handler);
         return true;
     }
 
