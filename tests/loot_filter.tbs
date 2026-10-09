@@ -10,7 +10,8 @@
 # triggered; Death Touch 5 is refused with a custom cast error); mod-auto-loot (10 yd, every 250 ms) loots it
 # for the bot, and the filter acts one tick later. A looted corpse is gone about 3 s later
 # (mod-auto-loot halves its time on every scan), so the next `pick` finds a living one. A loot that
-# merges into a stack acts on the whole stack (unchanged behaviour).
+# merges into a stack acts on the whole stack (unchanged behaviour). Each kill happens at its own
+# Snapjaw spawn along the river, so a corpse an earlier run left unlooted is not picked again.
 #   b  one level-80 mage; its rules are cleared at the start and at the end
 name    mod-loot-filter - rules, loot, actions
 timeout 240s
@@ -34,6 +35,7 @@ as b .lootfilter request R|0|0|1|1|0:0:1:0:;3:0:7:8:
 expect output has "LFLS R|"
 expect output has "|1|1|1|0:0:1:0:;3:0:7:8:"
 expect output has "LFLS N|1"
+place 0 -217.3 -1112.8 36.5
 pick t1 creature:2408 near b
 require t1 alive
 do b offset 6 6
@@ -51,6 +53,7 @@ log 2 - TO STORAGE deposits it (the type condition with any subclass)
 as b .lootfilter request X
 as b .lootfilter request R|0|0|4|1|3:0:7:255:
 expect output has "LFLS N|1"
+place 0 -147.4 -1122.5 35
 pick t2 creature:2408 near b
 require t2 alive
 do b offset 6 6
@@ -72,6 +75,7 @@ expect output value Stored >= 1
 log 2c - DISENCHANT on an item without disenchant loot stores it, as the old fallback did
 as b .lootfilter request X
 as b .lootfilter request R|0|0|2|1|6:0:3712:0:
+place 0 -89.6 -1107.8 36.2
 pick t7 creature:2408 near b
 require t7 alive
 do b offset 6 6
@@ -85,6 +89,7 @@ expect b item 3712 == 0
 log 3 - KEEP leaves the meat in the bags (no deposit any more)
 as b .lootfilter request X
 as b .lootfilter request R|0|0|0|1|3:0:7:255:
+place 0 -10.3 -1111.9 36.1
 pick t3 creature:2408 near b
 require t3 alive
 do b offset 6 6
@@ -108,6 +113,7 @@ as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request R|0|1|0|0|6:0:3712:0:
 expect output has "LFLS N|2"
 expect output has "LFLS R|"
+place 0 38.7 -1118.6 35.1
 pick t4 creature:2408 near b
 require t4 alive
 do b offset 6 6
@@ -122,6 +128,7 @@ log 6 - the same KEEP switched on protects the meat from the DELETE below it
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request R|0|1|0|1|6:0:3712:0:
+place 0 110 -1145 35.8
 pick t5 creature:2408 near b
 require t5 alive
 do b offset 6 6
@@ -137,6 +144,7 @@ as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request F|0
 expect output has "LFLS F|0"
+place 0 -282.9 -1101.5 34.6
 pick t6 creature:2408 near b
 require t6 alive
 do b offset 6 6
