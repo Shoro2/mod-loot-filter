@@ -12,7 +12,9 @@
 # front" on a moving Snapjaw); mod-auto-loot (10 yd, every 250 ms) loots it
 # for the bot, and the filter acts one tick later. A looted corpse is gone about 3 s later
 # (mod-auto-loot halves its time on every scan), so the next `pick` finds a living one. A loot that
-# merges into a stack acts on the whole stack (unchanged behaviour). Each kill happens at its own
+# merges into a stack acts on the whole stack (unchanged behaviour). A Snapjaw drops one or two
+# Turtle Meat, so kept items are counted with ">= 1". `approach` is a near teleport that completes
+# a moment later, hence the `wait 1s` before the casts. Each kill happens at its own
 # Snapjaw spawn along the river, so a corpse an earlier run left unlooted is not picked again.
 #   b  one level-80 mage; its rules are cleared at the start and at the end
 name    mod-loot-filter - rules, loot, actions
@@ -40,8 +42,8 @@ expect output has "LFLS N|1"
 place 0 -217.3 -1112.8 36.5
 pick t1 creature:2408 near b
 require t1 alive
-do b offset 6 6
 do b approach t1
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
@@ -60,8 +62,8 @@ expect output has "LFLS N|1"
 place 0 -147.4 -1122.5 35
 pick t2 creature:2408 near b
 require t2 alive
-do b offset 6 6
 do b approach t2
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
@@ -84,8 +86,8 @@ as b .lootfilter request R|0|0|2|1|6:0:3712:0:
 place 0 -89.6 -1107.8 36.2
 pick t7 creature:2408 near b
 require t7 alive
-do b offset 6 6
 do b approach t7
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
@@ -100,22 +102,22 @@ as b .lootfilter request R|0|0|0|1|3:0:7:255:
 place 0 -10.3 -1111.9 36.1
 pick t3 creature:2408 near b
 require t3 alive
-do b offset 6 6
 do b approach t3
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
 waitfor t3 dead timeout 5s
 wait 2s
 waitfor t3 missing timeout 15s
-expect b item 3712 == 1
+expect b item 3712 >= 1
 
 log 4 - the bag scan acts on nothing and names the KEEP rule for the meat
 as b .lootfilter request S
 expect output has "LFLS S|"
 expect output has "|0|1|3712"
 expect output has "LFLS Z|"
-expect b item 3712 == 1
+expect b item 3712 >= 1
 
 log 5 - a switched-off KEEP on top does not protect; DELETE takes the whole stack
 as b .lootfilter request X
@@ -126,8 +128,8 @@ expect output has "LFLS R|"
 place 0 38.7 -1118.6 35.1
 pick t4 creature:2408 near b
 require t4 alive
-do b offset 6 6
 do b approach t4
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
@@ -143,33 +145,34 @@ as b .lootfilter request R|0|1|0|1|6:0:3712:0:
 place 0 110 -1145 35.8
 pick t5 creature:2408 near b
 require t5 alive
-do b offset 6 6
 do b approach t5
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
 waitfor t5 dead timeout 5s
 wait 2s
 waitfor t5 missing timeout 15s
-expect b item 3712 == 1
+expect b item 3712 >= 1
 
 log 7 - filter off: nothing happens, even under a DELETE rule
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request F|0
 expect output has "LFLS F|0"
+do b destroy 3712
 place 0 -282.9 -1101.5 34.6
 pick t6 creature:2408 near b
 require t6 alive
-do b offset 6 6
 do b approach t6
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
 waitfor t6 dead timeout 5s
 wait 2s
 waitfor t6 missing timeout 15s
-expect b item 3712 == 2
+expect b item 3712 >= 1
 
 log 7b - a quest item is never touched, even under a DELETE rule
 as b .lootfilter request F|1
@@ -177,8 +180,8 @@ place 0 705 610 45
 do b destroy 3317
 pick g1 creature:1939 near b
 require g1 alive
-do b offset 6 6
 do b approach g1
+wait 1s
 do b cast 42921 triggered
 do b cast 42921 triggered
 do b cast 42921 triggered
