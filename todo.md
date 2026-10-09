@@ -4,9 +4,9 @@
 
 ## Functional improvements
 
-- [ ] **(low)** Per-item-class configuration for `LootTemplates_Disenchant`: currently the global Disenchant template is used. Would be nice: optional per-quality bonus factor.
-- [ ] **(low)** Bulk import / export of filter rules (e.g. JSON string via slash command), so players can share rule sets.
-- [ ] **(low)** Rule templates as server defaults: only the preset buttons are wired up in the UI right now. Server-side default rules per new character would be useful.
+- [ ] **(low)** Per-quality bonus factor for disenchanting: the global `LootTemplates_Disenchant` is used.
+- [ ] **(low)** Import / export of rule sets (e.g. a string players can share).
+- [ ] **(low)** Server default rules for new characters (the window has client-side templates only).
 
 ## Docs
 

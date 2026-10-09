@@ -1,136 +1,138 @@
 # Functions & mechanics — mod-loot-filter
 
-> Detailed function and mechanics reference. For content/purpose docs see `CLAUDE.md`.
+> How the module works. For purpose and ids see `CLAUDE.md`; the design rationale is in
+> `docs/superpowers/specs/2026-10-09-loot-filter-ui-rework-design.md`.
 
 ## Module loader
 
-### `Addmod_loot_filterScripts()`
-- **File**: `src/mod_loot_filter_loader.cpp`
-- **Effect**: registers the `LootFilter` class (`PlayerScript` + `WorldScript` + `CommandScript`).
+`Addmod_loot_filterScripts()` (`src/mod_loot_filter_loader.cpp`) → `AddLootFilterScripts()` registers
+`LootFilter_World`, `LootFilter_Player`, `LootFilter_Command`.
 
-## Enums (`src/LootFilter.h`)
+## Hooks
 
-```cpp
-enum LootFilterCondition {
-    QUALITY = 0, ITEM_LEVEL = 1, SELL_PRICE = 2, ITEM_CLASS = 3,
-    ITEM_SUBCLASS = 4, IS_CURSED = 5, ITEM_ID = 6, NAME_CONTAINS = 7
-};
+| Script | Hook | Behaviour |
+|------|------|-----------|
+| World | `OnAfterConfigLoad` | reads the six `LootFilter.*` keys (`MaxRulesPerChar` clamped 1-100) |
+| World | `OnStartup` | `MigrateLegacyTable()` (below), then the rule-id counter = `MAX(ruleId) + 1` |
+| Player | `OnPlayerLogin` | `LoadState()`: settings row (created if missing) + rules with conditions → cache |
+| Player | `OnPlayerLogout` | flushes the pending statistics batch, drops the cache entry |
+| Player | `OnPlayerLootItem` | if the filter is on and the character has rules: schedules `LootFilterEvent` for the next tick — **no DB access** |
+| Player | `OnPlayerBeforeSendChatMessage` | takes addon whispers starting with `LFLT\t` (≤ 250 bytes payload) → `HandleRequest()` |
+| Player | `OnPlayerDeleteFromDB` | deletes the character's rule, condition and settings rows in the deletion transaction |
 
-enum LootFilterOp {  // only for numeric conditions
-    OP_EQUALS = 0, OP_GREATER = 1, OP_LESS = 2
-};
+The loot evaluation runs one tick late because mod-paragon-itemgen sets the slot 11 enchant (the cursed
+marker) in the same loot hook.
 
-enum LootFilterAction {
-    KEEP = 0, SELL = 1, DISENCHANT = 2, DELETE = 3,
-    NONE = 4  // inert: filter off, no rules, or no rule matched
-};
-```
-
-## Hook points (PlayerScript)
-
-| Hook | Behavior |
-|------|-----------|
-| `OnPlayerLogin` | `LoadRulesForPlayer(guid)` + `LoadSettingsForPlayer(guid)` → into in-memory cache |
-| `OnPlayerLootItem` | **Deferred** to the next server tick (see note below), then `EvaluateFilter(player, item)` |
-| `OnPlayerLogout` | Persist stats, invalidate cache |
-
-`WorldScript`:
-| Hook | Behavior |
-|------|-----------|
-| `OnAfterConfigLoad` | read all 6 config keys via `sConfigMgr->GetOption<>()` |
-
-> **Important — deferred eval**: The filter evaluation does **not** happen synchronously in `OnPlayerLootItem`. The hook only inserts the item into a pending queue; the actual evaluation runs on the next server tick. Reason: mod-paragon-itemgen also modifies slot 11 in the `OnPlayerLootItem` hook — if the filter checked immediately, the `IsParagonCursedItem` detection would be racy.
-
-## Core functions (`src/LootFilter.cpp`)
-
-| Function | Purpose |
-|----------|-------|
-| `EvaluateFilter(Player*, Item*)` | iterates rules in priority order, returns the **first** matching action |
-| `MatchesCondition(rule, item, proto)` | eval of a single rule: switches on `conditionType` to the matching field, compares via `conditionOp` |
-| `ApplyAction(player, item, action, rule)` | dispatches to `SellItem` / `DisenchantItem` / `DeleteItem` / Keep+storage deposit |
-| `SellItem(Player*, Item*)` | increments `totalSold` by `SellPrice * count`, item destroy, money formatted (`Xg Ys Zc`) |
-| `DisenchantItem(Player*, Item*)` | rolls `LootTemplates_Disenchant` (no skill check), materials in inventory or (if eligible) Endless Storage; fallback for non-disenchantable: keep |
-| `DeleteItem(Player*, Item*)` | hard destroy without reward |
-| `IsParagonCursedItem(Item*)` | checks slot 11 for enchant ID `920001` or range `950001`-`950099` |
-| `LoadRulesForPlayer(guid)` | prepared SELECT on `character_loot_filter` ORDER BY priority |
-| `LoadSettingsForPlayer(guid)` | prepared SELECT on `character_loot_filter_settings` |
-| `IsStorageEligible(item)` | true if class 7 (TradeGoods stackable), class 3 (gem stackable), class 9 (recipe), or class 0 / subclass 5 (Food & Drink, stackable — e.g. *Chunk of Boar Meat*) |
-
-### Action special cases
-
-- **`SellPrice == 0`** → action is converted to Keep (items cannot be sold for 0 copper).
-- **Item not disenchantable** → Disenchant action falls back to Keep (previously: to Sell — corrected on 2026-03-22).
-- **Matching Keep rule + item is storage-eligible** → deposited into `custom_endless_storage` instead of held in the inventory. Log entry "Stored [item] x N in Storage". Triggered **only by an explicit Keep rule that matches** (while the filter is enabled).
-- **No rule applies → `NONE` → item left untouched.** `EvaluateFilter` returns `NONE` (and the module does nothing — no sell / DE / delete and, crucially, **no** storage deposit) in every "no rule applies" case: filter disabled (`filterEnabled = false`, "Filter: OFF"), no settings row, **no rules configured**, or **no rule matched**. There is **no auto-storage without a matching rule**. `KEEP` is *not* inert (it sweeps storage-eligible mats into Endless Storage), so these fall-through cases must return `NONE`, never `KEEP`.
-
-## Priority eval
+## Evaluation (`LootFilterRules::Evaluate`)
 
 ```
-all rules (standalone + group) sorted together in priority ASC
-  └─ per rule: MatchesCondition?
-     └─ yes → return action  (first match wins)
-  └─ no rule matched → return NONE (item left untouched, no storage)
+quest item (class 12, Bonding 4/5, StartQuest > 0)  → PROTECTED, nothing happens
+for rule in position order:
+    skip if off, empty, or its action is switched off by LootFilter.Allow*
+    all conditions match → that rule's action
+no rule matched → NO RULE, the item stays
 ```
 
-Behavior since 2026-03-22 (commit `8818661`): previously standalone rules always took precedence over group rules, which undermined the priority.
+`Matches`: quality / item level / sell price compare with is (=), at least (≥), at most (≤); item type =
+class and (subclass or 255 = any); cursed = slot 11 enchant 920001 or 950001-950099; item = entry; name =
+case-insensitive substring of `Name1`.
 
-## Money format
+## Actions (`Act` → `Record`)
 
-```
-Input: 12345 copper
-Output: "1g 23s 45c"
-```
+| Action | Effect | Falls back to KEEP when |
+|---|---|---|
+| 0 Keep | nothing | — |
+| 4 To storage | `custom_endless_storage` += count, item destroyed | not storage-eligible (recipe; stackable food; stackable trade goods or gem) |
+| 1 Sell | money += SellPrice × count, item destroyed | sell price 0; the money would pass `MAX_MONEY_AMOUNT` |
+| 2 Disenchant | `LootTemplates_Disenchant` rolled; storable mats to the storage, the rest to the bags (mail if full); item destroyed | `DisenchantID` 0 |
+| 3 Delete | item destroyed | — |
 
-Implemented in a small helper function (see `LootFilter.cpp`). Zero parts are dropped ("1g" instead of "1g 0s 0c").
+The action acts on the item the loot hook reports, i.e. the whole stack the loot merged into (unchanged
+behaviour). `Record` then:
 
-## Chat commands (CommandScript)
+- adds to the cached totals and the **batch** (sold items + money, disenchanted, stored, deleted); the
+  first entry of a batch schedules `LootFilterSummaryEvent` one tick later, which writes the batch as one
+  `UPDATE … SET total = total + …` and, in chat mode 1, prints the summary line
+  (`[Loot Filter] Sold 5 for 2s 40c, disenchanted 1, stored 6, deleted 1.`);
+- sends the window an `L` message;
+- in chat mode 0 prints one line per action with item links (`Sold [Broken Fang] x4 for 1s 60c.`,
+  `Kept [X] (no vendor price).` …). `LootFilter.LogActions = 0` silences both chat modes.
 
-```
-.lootfilter reload    → reload rules + settings from DB (in-memory cache)
-.lootfilter toggle    → flip filterEnabled bit, persist
-.lootfilter stats     → output totalSold (g/s/c), totalDisenchanted, totalDeleted
-```
+## Window requests (`HandleRequest`)
 
-All `SEC_PLAYER`. No cooldown.
+Rate limit per character: 20 messages burst, 10 per second refill; a bag scan at most every 2 s
+(`!|busy`). Every rule change rewrites the character's rules in one transaction (`SaveRules`) and answers
+with the full list.
 
-## AIO handlers (Lua)
+## Addon messages
 
-Server side (client → server, in `LootFilter_Server.lua`):
+Fields are separated by `|`; a condition is `type:op:value:value2:text`, conditions are joined by `;`;
+a rule is `id|position|action|enabled|conditions`.
 
-| Handler | Args | Effect |
-|---------|------|---------|
-| `RequestData` | — | sends rules + settings to client |
-| `AddRule` | conditionType, conditionOp, conditionValue, conditionStr, action, priority | INSERT `character_loot_filter`, in-memory cache update |
-| `DeleteRule` | ruleId | DELETE + cache update |
-| `ToggleRule` | ruleId | UPDATE enabled |
-| `ToggleFilter` | — | UPDATE settings.filterEnabled |
-| `UpdatePriority` | ruleId, newPriority | UPDATE + re-sort |
-| `DeleteAllRules` | — | DELETE WHERE characterId = ? |
+| Client → core (`LFLT`) | Meaning |
+|---|---|
+| `G` | send settings and rules |
+| `R|id|pos|action|enabled|conds` | save; `id` 0 = new; `pos` 0 or past the end = last |
+| `D|id` · `M|id|pos` · `E|id|on` | delete · move · switch on/off |
+| `F|on` · `C|mode` · `X` | filter on/off · chat mode 0/1/2 · delete all rules |
+| `T|bag|slot` · `S` | test one bag slot · scan all bags (client bag 0-4, slot 1-n) |
 
-Client side (server → client, in `LootFilter_Client.lua`):
+| Core → client (`LFLS`) | Meaning |
+|---|---|
+| `I|enabled|chatMode|maxRules|allowSell|allowDE|allowDel|sold|de|del|stored` | settings, limits, totals |
+| `R|…` per rule, then `N|count` | the rule list (the client swaps it in on `N`) |
+| `T|bag|slot|result|position` | test result: 0-4 action, 5 no rule, 6 protected |
+| `S|bag|slot|result|position` per item, then `Z|count` | bag scan |
+| `L|action|entry|suffix|count|money|position|entry:count,…` | one action happened |
+| `F|on` | filter state (also after `.lootfilter toggle`) |
+| `!|code` | `limit`, `invalid`, `action`, `notfound`, `busy`, `noitem`, `disabled` |
 
-| Handler | Args | Effect |
-|---------|------|---------|
-| `ReceiveSettings` | filterEnabled, totalSold, totalDisenchanted, totalDeleted | UI update |
-| `ClearRules` | — | clear client-side rule cache |
-| `ReceiveRule` | ruleId, conditionType, op, value, str, action, priority, enabled | single rule to client |
-| `RefreshUI` | — | trigger UI redraw |
+Bag addressing: client bag 0 slot n = server bag 255 slot 22+n; client bag b (1-4) slot n = server bag
+slot 18+b, slot n-1.
 
-## Configuration options
+## Startup migration (`MigrateLegacyTable`)
+
+Runs while `character_loot_filter` exists. If `character_loot_filter_rule` already has rows the old table
+is only renamed; if `character_loot_filter_legacy` already exists nothing happens (error logged). Otherwise
+the old rows are read per character, `MigrateCharacter()` builds the rules, one transaction inserts them,
+then `RENAME TABLE character_loot_filter TO character_loot_filter_legacy`. Log line:
+`mod-loot-filter: migrated N rule(s) of M character(s) … (X switched off for review, Y dropped)`.
+
+`MigrateCharacter`: standalone row = one rule; group = one rule from its enabled rows (all rows, switched
+off, when none was enabled), action of the lowest-priority row; order = priority, standalone before group,
+lowest rule id; `>` v → at least v+1, `<` v → at most v-1; class + subclass rows → one item-type
+condition, a lone subclass → weapon (old client label) or armor; old KEEP on trade goods / gems / recipes /
+consumables → TO STORAGE. Switched off for review: anything not expressible exactly (operator on class,
+subclass or item, odd or long names, more than four conditions, `< 0`) and **item level / sell price rows
+with '='**, which the March 2026 UI saved for "below".
+
+## Commands
+
+| Command | Effect |
+|---|---|
+| `.lootfilter reload` | re-reads settings and rules from the DB (after manual SQL) and sends them to the window |
+| `.lootfilter toggle` | filter on/off, saved, window updated |
+| `.lootfilter stats` | totals |
+
+## Configuration
 
 | Key | Default | Effect |
 |-----------|---------|---------|
-| `LootFilter.Enable` | `true` | master toggle |
-| `LootFilter.AllowSell` | `true` | allow Sell action |
-| `LootFilter.AllowDisenchant` | `true` | allow DE action |
-| `LootFilter.AllowDelete` | `true` | allow Delete action |
-| `LootFilter.LogActions` | `true` | sysmessage per filter action |
-| `LootFilter.MaxRulesPerChar` | `30` | limit for `AddRule` |
+| `LootFilter.Enable` | 1 | master switch (off: no state, no filtering, the window gets `!|disabled`) |
+| `LootFilter.AllowSell` / `AllowDisenchant` / `AllowDelete` | 1 | 0 = rules with that action are skipped and the editor greys it out |
+| `LootFilter.LogActions` | 1 | 0 = no chat output in any chat mode |
+| `LootFilter.MaxRulesPerChar` | 30 | 1-100 |
 
-If an `Allow*` option is set to `false`, the corresponding action falls back to Keep (with log).
+## Tests
+
+- `tests\build_offline.cmd` — compiles `tests/rules_test.cpp` against `LootFilterRules.h` (MSVC, `/W4 /WX`,
+  only `Define.h` from the core) and runs the client harness `tests/client_test.lua` with a Lua 5.2 built
+  from `dcore_bin\_deps\lua52-src` into `build\`.
+- `tests\schema_test.ps1` — the SQL file twice on a scratch schema `lf_schema_test` (fresh and on the old
+  tables), dropped afterwards.
 
 ## Known limitations
 
-- **Eluna Lua DB calls** use string concatenation (no PreparedStatement equivalent in Eluna).
-- **Cursed detection** only works if mod-paragon-itemgen has already set the slot 11 entry — hence the deferred eval.
-- **`LootTemplates_Disenchant`** is global — no server config per item quality possible, everything is vanilla DE loot.
+- Rules edited by hand in the DB need `.lootfilter reload` (the cache is the source of truth).
+- Item links in the log are built from entry + random property id; the suffix factor is not sent, so a
+  random-suffix tooltip may show other stat values than the real item.

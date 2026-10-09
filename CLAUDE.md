@@ -1,71 +1,71 @@
 # mod-loot-filter
 
-> Read [`INDEX.md`](./INDEX.md) first. Mechanics & hooks: [`functions.md`](./functions.md). Folder layout: [`data_structure.md`](./data_structure.md). Open items: [`todo.md`](./todo.md). Commit trail: [`log.md`](./log.md).
+> Read [`INDEX.md`](./INDEX.md) first. Mechanics & hooks: [`functions.md`](./functions.md). Folder layout: [`data_structure.md`](./data_structure.md). Open items: [`todo.md`](./todo.md). Commit trail: [`log.md`](./log.md). Design of the 2026-10 rework: [`docs/superpowers/specs/2026-10-09-loot-filter-ui-rework-design.md`](./docs/superpowers/specs/2026-10-09-loot-filter-ui-rework-design.md).
 
 ## What is this module?
 
-AzerothCore module for **WoW 3.3.5a (WotLK)**. Provides a rule-based **automatic item filtering system** for looted items: the player creates their own filter rules via the AIO UI, and matching items are automatically sold (vendor), disenchanted, or deleted afterwards. A whitelist action ("Keep") allows protecting valuable items from broader rules.
+AzerothCore module for **WoW 3.3.5a**: every looted item is checked against the character's rules and then
+kept, stored in the Endless Storage, sold, disenchanted or deleted. A **rule** is one action plus up to
+**four AND-ed conditions**; rules are checked **top to bottom** and the **first match decides**. No match →
+the item stays in the bags. **Quest items are never touched.**
 
-Per-character — every character has its own rules, stored in `acore_characters`.
+Per character, managed in game in the window `/lf` (Rules / Test / Log tabs).
 
-## Role in the overall project
+## Who owns what
 
 ```
-Loot source (manual, mod-auto-loot)
-        │
-        ▼ sScriptMgr->OnPlayerLootItem()
-        │
-   ┌────┴────────────────────────────────────────┐
-   ▼                                              ▼
-mod-paragon-itemgen  (apply bonus stats)      mod-loot-filter  (filter: Keep / Sell / DE / Delete)
+client window (lua_scripts/LootFilter_Client.lua, shipped by AIO)
+        │  addon message "LFLT\t…" (whisper to self)      ▲ "LFLS\t…"
+        ▼                                                  │
+src/LootFilter.cpp  — the ONLY writer of the tables; per-character cache; actions; statistics
+src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migration (offline-tested)
 ```
 
-The module hangs on the shared `OnPlayerLootItem` hook. It works both with mod-auto-loot (AOE loot in radius) and with manual looting. It expects **no** special hook pattern — rule evaluation runs per item that ends up in the inventory.
+- The core keeps a per-character cache (loaded at login, updated with every write) — **nothing reads the DB
+  on loot**. Out-of-band SQL needs `.lootfilter reload`.
+- `lua_scripts/LootFilter_Server.lua` is an empty stub on purpose (it overwrites the pre-2026-10 AIO
+  handlers on deploy; the host deploy never deletes).
+- **Deploy**: the module owns its Lua (`fl_host_sync_policy.json` → `module_owned`); the files go to
+  `lua_scripts/LootFilter/` on the workbench and the host. `fl-lua-scripts` no longer tracks `LootFilter/`.
 
 ## Custom data
 
 | Type | Entry | Note |
 |-----|--------|-----------|
-| **DB tables (acore_characters)** | `character_loot_filter` | Per-character rules (condition, operator, value, action, priority, enabled) |
-| | `character_loot_filter_settings` | Master toggle + statistics (totalSold, totalDisenchanted, totalDeleted) |
-| **DBC patches** | none | |
-| **Custom spells** | none | |
-| **Custom items/NPCs** | none | |
-| **AIO handler names** | `LF` (server) / `LF_Client` (client) | Details: [`functions.md`](./functions.md#aio-handler) |
-| **Slash commands** | `/lf`, `/lootfilter` | opens the filter UI |
-| **GM commands** | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats` | all `SEC_PLAYER` |
+| DB (`acore_characters`) | `character_loot_filter_rule` | ruleId (assigned by the core), characterId, position, action, enabled |
+| | `character_loot_filter_condition` | ruleId, slot 0-3, type, op, value, value2, text |
+| | `character_loot_filter_settings` | filterEnabled, chatMode, totalSold (BIGINT copper), totalDisenchanted, totalDeleted, totalStored |
+| | `character_loot_filter_legacy` | the pre-2026-10 table, renamed after the one-time migration; kept, never read |
+| Addon prefixes | `LFLT` (client → core), `LFLS` (core → client) | formats in [`functions.md`](./functions.md#addon-messages) |
+| Slash | `/lf`, `/lootfilter` (`reload`, `minimap`) | global `LootFilter_Toggle()` for the command hub |
+| Commands | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats` | `SEC_PLAYER` |
+| Saved var (client) | `LootFilterUI_Prefs` | minimap angle / hidden, per character (AIO) |
+| DBC / spells / items / NPCs | none | |
 
-## Filter mechanics (top level)
+## Rules (top level)
 
-| Condition type | Operators |
-|---------------|------------|
-| Quality, Item Level, Sell Price, Item Class, Item Subclass, Item ID | `=`, `>`, `<` |
-| Cursed status | bool |
-| Name contains | substring |
+| Condition (type id) | Operators / value |
+|---|---|
+| Quality (0) | is / at least / at most · 0-7 |
+| Item level (1) | is / at least / at most · 0-65535 |
+| Sell price (2) | is / at least / at most · copper |
+| Type (3) | is · class + subclass (255 = any) |
+| Cursed (5) | is · 1 cursed / 0 not (slot 11 = 920001 or 950001-950099, mod-paragon-itemgen) |
+| Item (6) | is · item entry |
+| Name contains (7) | text ≤ 40 chars, letters/digits/space/`'-.,`, case-insensitive, `Name1` |
 
-Actions: **Keep** (whitelist) / **Sell** (vendor) / **Disenchant** (with skill fallback to Sell) / **Delete**. Rules run in priority order — lowest value first, **first match wins**.
+Actions: **0 Keep** (stays, no deposit) · **1 Sell** · **2 Disenchant** (mats to the Endless Storage) ·
+**3 Delete** · **4 To storage** (storage-eligible items deposited, others stay). Sell price 0, not
+disenchantable, not storable, or the gold cap → the item is kept instead.
 
-Cursed detection: the module reads slot 11 enchantment on every item. Values `920001` ("Cursed" marker) and the range `950001-950099` (passive spells) are treated as "cursed". → dependency on mod-paragon-itemgen for the slot 11 convention.
+## Configuration
 
-## Configuration (top level)
-
-`conf/loot_filter.conf.dist`:
-
-- `LootFilter.Enable` (master toggle)
-- `LootFilter.AllowSell`, `AllowDisenchant`, `AllowDelete`
-- `LootFilter.LogActions`
-- `LootFilter.MaxRulesPerChar = 30`
-
-Details and defaults: [`functions.md`](./functions.md#configuration).
+`LootFilter.Enable`, `AllowSell`, `AllowDisenchant`, `AllowDelete` (a disallowed action makes its rules
+skip), `LogActions` (server-wide chat switch), `MaxRulesPerChar` (default 30, clamped 1-100). The chat
+mode per character (every action / one summary per loot = default / none) is set in the Log tab.
 
 ## What this module does **not** do
 
-- **no** AH/mail filter — only acts on `OnPlayerLootItem` events
-- **no** auto-use (e.g. quest items opened automatically)
-- **no** equipment auto-equip
-- **no** bulk import / export of rule sets — rules must be created via the UI (see [`todo.md`](./todo.md))
-- **no** server defaults — new characters start without rules (see [`todo.md`](./todo.md))
-
-## License
-
-GPL v2.
+- no AH / mail / trade filtering — only `OnPlayerLootItem`
+- no OR inside a rule (use two rules), no rule import/export, no server default rules (see `todo.md`)
+- no auto-use, no auto-equip
