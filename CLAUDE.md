@@ -1,6 +1,12 @@
 # mod-loot-filter
 
-> Read [`INDEX.md`](./INDEX.md) first. Mechanics & hooks: [`functions.md`](./functions.md). Folder layout: [`data_structure.md`](./data_structure.md). Open items: [`todo.md`](./todo.md). Commit trail: [`log.md`](./log.md). Design of the 2026-10 rework: [`docs/superpowers/specs/2026-10-09-loot-filter-ui-rework-design.md`](./docs/superpowers/specs/2026-10-09-loot-filter-ui-rework-design.md).
+> **Internal docs live in the vault, not here** (rule since 2026-10-18: this public repo keeps only
+> README.md with the general info and installation, this CLAUDE.md, the license and the code).
+> Index, data structure, functions, log and todo: share-public `docs/World of Warcraft/module-repos/mod-loot-filter/`
+> (local checkout `C:\Users\Anwender\Documents\GitHub\share-public`). The 2026-10 rework spec and plan are in that folder's `specs/` and `plans/`. Update them there,
+> in a vault worktree, in the same session as the code change.
+
+> Read [`INDEX.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/00-index.md) first. Mechanics & hooks: [`functions.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/functions.md). Folder layout: [`data_structure.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/data_structure.md). Open items: [`todo.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/todo.md). Commit trail: [`log.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/log.md). Design of the 2026-10 rework: [`share-public/docs/World of Warcraft/module-repos/mod-loot-filter/specs/2026-10-09-loot-filter-ui-rework-design.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/specs/2026-10-09-loot-filter-ui-rework-design.md).
 
 ## What is this module?
 
@@ -37,7 +43,7 @@ src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migratio
 | | `character_loot_filter_condition` | ruleId, slot 0-3, type, op, value, value2, text |
 | | `character_loot_filter_settings` | filterEnabled, chatMode, totalSold (BIGINT copper), totalDisenchanted, totalDeleted, totalStored |
 | | `character_loot_filter_legacy` | the pre-2026-10 table, renamed after the one-time migration; kept, never read |
-| Addon prefixes | `LFLT` (client → core), `LFLS` (core → client) | formats in [`functions.md`](./functions.md#addon-messages) |
+| Addon prefixes | `LFLT` (client → core), `LFLS` (core → client) | formats in [`functions.md`](https://github.com/Shoro2/share-public/blob/main/docs/World%20of%20Warcraft/module-repos/mod-loot-filter/functions.md#addon-messages) |
 | Slash | `/lf`, `/lootfilter` (`reload`, `minimap`) | global `LootFilter_Toggle()` for the command hub |
 | Commands | `.lootfilter reload`, `.lootfilter toggle`, `.lootfilter stats`, `.lootfilter request <payload>` | `SEC_PLAYER`; `request` = the window's protocol from chat (bots, debugging) |
 | Saved var (client) | `LootFilterUI_Prefs` | minimap angle / hidden, per character (AIO) |
