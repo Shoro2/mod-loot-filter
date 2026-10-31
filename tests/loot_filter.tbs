@@ -19,6 +19,9 @@
 # Steps 4b-4d check the hand-on (2026-10-31): Frosty Spinneret (33629: grey junk, sells for 15s 62c,
 # no disenchant loot, not storable) and Voldrune Legs (36000: green cloth, disenchant loot 15) come
 # from the director's .additem, so the bag scan names the deciding rule for each.
+# Steps 4e-4g check the condition groups (2026-10-31): the logic field (bit g = group g needs any
+# one condition, 16 = any group) and the group field after a condition's text; 4g reads them back
+# from the DB.
 #   b  one level-80 mage; its rules are cleared at the start and at the end
 name    mod-loot-filter - rules, loot, actions
 timeout 300s
@@ -186,6 +189,42 @@ waitfor t8 dead timeout 5s
 wait 2s
 waitfor t8 missing timeout 15s
 expect b item 3712 == 0
+
+log 4e - condition groups: (trade goods OR misc) AND not cursed sells the junk, not the armor
+as b .lootfilter request X
+as b .lootfilter request R|0|0|1|1|3:0:7:255:;3:0:15:255:;5:0:0:0::1|1
+expect output has "|1|1|1|3:0:7:255:;3:0:15:255:;5:0:0:0::1|1"
+expect output has "LFLS N|1"
+do b destroy 33629
+do b destroy 36000
+do gm target b
+as gm .additem 33629
+as gm .additem 36000
+wait 3s
+as b .lootfilter request S
+expect output has "|1|1|33629"
+expect output has "|5|0|36000"
+log 4f - groups joined with ANY: armor OR misc, so both sell
+as b .lootfilter request X
+as b .lootfilter request R|0|0|1|1|3:0:4:255:;3:0:15:255::1|16
+expect output has "|1|1|1|3:0:4:255:;3:0:15:255::1|16"
+wait 3s
+as b .lootfilter request S
+expect output has "|1|1|33629"
+expect output has "|1|1|36000"
+log 4g - a group number past the third and a logic bit of an unused group are refused
+as b .lootfilter request R|0|0|1|1|0:0:1:0::3|0
+expect output has "LFLS !|invalid"
+as b .lootfilter request R|0|0|1|1|0:0:1:0:|2
+expect output has "LFLS !|invalid"
+do b destroy 33629
+do b destroy 36000
+as b .lootfilter request X
+as b .lootfilter request R|0|0|1|1|3:0:4:255:;3:0:15:255::1|16
+as b .lootfilter reload
+expect output has "Rules reloaded (1 rules)"
+as b .lootfilter request G
+expect output has "|1|1|1|3:0:4:255:;3:0:15:255::1|16"
 
 log 5 -a switched-off KEEP on top does not protect; DELETE takes the whole stack
 as b .lootfilter request X
