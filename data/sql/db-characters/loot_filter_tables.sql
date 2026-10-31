@@ -13,13 +13,15 @@ CREATE TABLE IF NOT EXISTS `character_loot_filter_rule` (
     `position` TINYINT UNSIGNED NOT NULL COMMENT '1-based evaluation order',
     `action` TINYINT UNSIGNED NOT NULL COMMENT '0=keep,1=sell,2=disenchant,3=delete,4=store',
     `enabled` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    `logic` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'bit g=group g matches on any condition, 16=any group',
     PRIMARY KEY (`ruleId`),
     KEY `idx_char_position` (`characterId`, `position`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `character_loot_filter_condition` (
     `ruleId` INT UNSIGNED NOT NULL,
-    `slot` TINYINT UNSIGNED NOT NULL COMMENT '0-3',
+    `slot` TINYINT UNSIGNED NOT NULL COMMENT '0-7',
+    `grp` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'condition group 0-2',
     `type` TINYINT UNSIGNED NOT NULL COMMENT '0=quality,1=item level,2=sell price,3=item type,5=cursed,6=item,7=name',
     `op` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=is,1=at least,2=at most',
     `value` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -40,7 +42,8 @@ CREATE TABLE IF NOT EXISTS `character_loot_filter_settings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A settings table from the first version lacks chatMode and totalStored
--- and keeps totalSold as INT.
+-- and keeps totalSold as INT; rule and condition tables from before the
+-- condition groups (2026-10-31) lack logic and grp.
 DELIMITER //
 DROP PROCEDURE IF EXISTS `loot_filter_settings_upgrade`//
 CREATE PROCEDURE `loot_filter_settings_upgrade`()
@@ -75,6 +78,27 @@ BEGIN
         ALTER TABLE `character_loot_filter_settings`
             MODIFY COLUMN `totalSold` BIGINT UNSIGNED NOT NULL DEFAULT 0
             COMMENT 'copper';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM `INFORMATION_SCHEMA`.`COLUMNS`
+        WHERE `TABLE_SCHEMA` = DATABASE()
+          AND `TABLE_NAME` = 'character_loot_filter_rule'
+          AND `COLUMN_NAME` = 'logic'
+    ) THEN
+        ALTER TABLE `character_loot_filter_rule`
+            ADD COLUMN `logic` TINYINT UNSIGNED NOT NULL DEFAULT 0
+            COMMENT 'bit g=group g matches on any condition, 16=any group'
+            AFTER `enabled`;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM `INFORMATION_SCHEMA`.`COLUMNS`
+        WHERE `TABLE_SCHEMA` = DATABASE()
+          AND `TABLE_NAME` = 'character_loot_filter_condition'
+          AND `COLUMN_NAME` = 'grp'
+    ) THEN
+        ALTER TABLE `character_loot_filter_condition`
+            ADD COLUMN `grp` TINYINT UNSIGNED NOT NULL DEFAULT 0
+            COMMENT 'condition group 0-2' AFTER `slot`;
     END IF;
 END//
 DELIMITER ;

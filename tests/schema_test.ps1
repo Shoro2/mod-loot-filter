@@ -29,6 +29,7 @@ function Get-Columns {
 $expected = @(
     'character_loot_filter_condition.ruleId:int unsigned:-',
     'character_loot_filter_condition.slot:tinyint unsigned:-',
+    'character_loot_filter_condition.grp:tinyint unsigned:0',
     'character_loot_filter_condition.type:tinyint unsigned:-',
     'character_loot_filter_condition.op:tinyint unsigned:0',
     'character_loot_filter_condition.value:int unsigned:0',
@@ -39,6 +40,7 @@ $expected = @(
     'character_loot_filter_rule.position:tinyint unsigned:-',
     'character_loot_filter_rule.action:tinyint unsigned:-',
     'character_loot_filter_rule.enabled:tinyint unsigned:1',
+    'character_loot_filter_rule.logic:tinyint unsigned:0',
     'character_loot_filter_settings.characterId:int unsigned:-',
     'character_loot_filter_settings.filterEnabled:tinyint unsigned:1',
     'character_loot_filter_settings.chatMode:tinyint unsigned:1',
@@ -78,6 +80,16 @@ try {
     $legacy = Invoke-Sql $schema "SELECT COUNT(*) FROM character_loot_filter"
     if ($legacy[0] -ne '1') { throw 'upgrade: the old rule table must be left to the core' }
     Write-Host 'upgrade: settings row kept, old rule table untouched'
+
+    # Case C: the 2026-10-09 rule and condition tables (no logic, no grp), with one rule.
+    Invoke-Sql '' "DROP DATABASE IF EXISTS $schema; CREATE DATABASE $schema;" | Out-Null
+    Invoke-Sql $schema "CREATE TABLE character_loot_filter_rule (ruleId INT UNSIGNED NOT NULL, characterId INT UNSIGNED NOT NULL, position TINYINT UNSIGNED NOT NULL, action TINYINT UNSIGNED NOT NULL, enabled TINYINT UNSIGNED NOT NULL DEFAULT 1, PRIMARY KEY (ruleId), KEY idx_char_position (characterId, position)); CREATE TABLE character_loot_filter_condition (ruleId INT UNSIGNED NOT NULL, slot TINYINT UNSIGNED NOT NULL, type TINYINT UNSIGNED NOT NULL, op TINYINT UNSIGNED NOT NULL DEFAULT 0, value INT UNSIGNED NOT NULL DEFAULT 0, value2 INT UNSIGNED NOT NULL DEFAULT 0, text VARCHAR(40) NOT NULL DEFAULT '', PRIMARY KEY (ruleId, slot)); INSERT INTO character_loot_filter_rule VALUES (5, 7, 1, 2, 1); INSERT INTO character_loot_filter_condition VALUES (5, 0, 5, 0, 0, 0, '');" | Out-Null
+    Invoke-File $schema
+    Invoke-File $schema
+    Assert-Columns 'groups'
+    $rule = Invoke-Sql $schema "SELECT CONCAT_WS(',', r.ruleId, r.action, r.logic, c.slot, c.grp, c.type) FROM character_loot_filter_rule r JOIN character_loot_filter_condition c ON c.ruleId = r.ruleId"
+    if ($rule[0] -ne '5,2,0,0,0,5') { throw "groups: rule row changed: $rule" }
+    Write-Host 'groups: rule kept as one group of AND'
     Write-Host 'schema_test: passed'
 }
 finally {

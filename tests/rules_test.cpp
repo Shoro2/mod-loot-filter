@@ -272,6 +272,117 @@ static void TestFallThrough()
     CHECK(Applies(ACTION_KEEP, token) && Applies(ACTION_DELETE, token));
 }
 
+// Condition groups: each group is all or any of its conditions, the groups
+// are joined with all or any.
+static Condition InGroup(Condition c, uint8 group)
+{
+    c.group = group;
+    return c;
+}
+
+static void TestGroups()
+{
+    uint8 const all = AllowedMask(true, true, true);
+    ItemFacts const hood = Hood();  // green cloth armor, ilvl 150, not cursed
+
+    // (armor OR weapon) AND quality at most green
+    Rule r = MakeRule(51, ACTION_DISENCHANT, {
+        InGroup(Cond(COND_ITEM_TYPE, OP_IS, 4, 255), 0),
+        InGroup(Cond(COND_ITEM_TYPE, OP_IS, 2, 255), 0),
+        InGroup(Cond(COND_QUALITY, OP_AT_MOST, 2), 1) });
+    r.logic = 0x01;
+    CHECK(ValidRule(r));
+    CHECK(GroupCount(r) == 2);
+    CHECK(RuleMatches(r, hood));
+    ItemFacts blue = hood;
+    blue.quality = 3;
+    CHECK(!RuleMatches(r, blue));
+    ItemFacts cloth = hood;
+    cloth.itemClass = 7;
+    CHECK(!RuleMatches(r, cloth));
+
+    // (armor AND green) OR (trade goods): any group
+    Rule o = MakeRule(52, ACTION_STORE, {
+        InGroup(Cond(COND_ITEM_TYPE, OP_IS, 4, 255), 0),
+        InGroup(Cond(COND_QUALITY, OP_IS, 2), 0),
+        InGroup(Cond(COND_ITEM_TYPE, OP_IS, 7, 255), 1) });
+    o.logic = LOGIC_JOIN_ANY;
+    CHECK(ValidRule(o));
+    CHECK(RuleMatches(o, hood));
+    CHECK(RuleMatches(o, cloth));
+    CHECK(!RuleMatches(o, blue));
+
+    // One group of OR, one condition each way.
+    Rule any = MakeRule(53, ACTION_SELL, { Cond(COND_QUALITY, OP_IS, 0),
+        Cond(COND_QUALITY, OP_IS, 2) });
+    any.logic = 0x01;
+    CHECK(RuleMatches(any, hood));
+    CHECK(!RuleMatches(any, blue));
+    any.logic = 0;
+    CHECK(!RuleMatches(any, hood));
+
+    // Evaluate uses the groups (and still hands on).
+    std::vector<Rule> rules = { r, o };
+    Renumber(rules);
+    Verdict v = Evaluate(rules, hood, all);
+    CHECK(v.result == ACTION_DISENCHANT && v.position == 1);
+    v = Evaluate(rules, cloth, all);
+    CHECK(v.result == ACTION_STORE && v.position == 2);
+
+    // Validation: groups in order, no gaps, none empty, at most three, logic
+    // bits only for the groups in use.
+    Rule gap = r;
+    gap.conditions[2].group = 2;
+    CHECK(!ValidRule(gap));
+    Rule startAtOne = r;
+    for (Condition& c : startAtOne.conditions)
+        ++c.group;
+    CHECK(!ValidRule(startAtOne));
+    Rule unordered = r;
+    std::swap(unordered.conditions[0], unordered.conditions[2]);
+    CHECK(!ValidRule(unordered));
+    Rule three = r;
+    three.conditions.push_back(InGroup(Cond(COND_CURSED, OP_IS, 0), 2));
+    three.logic = 0x07 | LOGIC_JOIN_ANY;
+    CHECK(ValidRule(three));
+    Rule four = three;
+    four.conditions.push_back(InGroup(Cond(COND_CURSED, OP_IS, 0), 3));
+    CHECK(!ValidRule(four));
+    Rule strayBit = r;
+    strayBit.logic = 0x04;
+    CHECK(!ValidRule(strayBit));
+    Rule badBit = r;
+    badBit.logic = 0x20;
+    CHECK(!ValidRule(badBit));
+
+    // Codec: group 0 writes no group field, the logic is the sixth field;
+    // five-field rules and five-part conditions still decode (logic 0).
+    CHECK(EncodeCondition(InGroup(Cond(COND_QUALITY, OP_IS, 2), 1))
+        == "0:0:2:0::1");
+    r.position = 1;
+    CHECK(EncodeRule(r) == "51|1|2|1|3:0:4:255:;3:0:2:255:;0:2:2:0::1|1");
+    Rule back;
+    std::vector<std::string> f = Split("R|" + EncodeRule(r), '|');
+    CHECK(f.size() == 7 && DecodeRule(f, 1, back));
+    CHECK(back.logic == 0x01 && back.conditions.size() == 3
+        && back.conditions[2].group == 1 && RuleMatches(back, hood));
+    f = Split("R|0|0|1|1|0:0:1:0:", '|');
+    CHECK(DecodeRule(f, 1, back) && back.logic == 0
+        && back.conditions[0].group == 0);
+    CHECK(!DecodeRule(Split("R|0|0|1|1|0:0:1:0::3|0", '|'), 1, back));
+    CHECK(!DecodeRule(Split("R|0|0|1|1|0:0:1:0:|2", '|'), 1, back));
+    CHECK(!DecodeRule(Split("R|0|0|1|1|0:0:1:0:|x", '|'), 1, back));
+
+    // An encoded rule must fit one addon message.
+    Rule longRule = MakeRule(4000000000u, ACTION_SELL, {});
+    for (int i = 0; i < 8; ++i)
+        longRule.conditions.push_back(Cond(COND_NAME, OP_IS, 0, 0,
+            "abcdefghijklmnopqrstuvwxyz"));
+    CHECK(!ValidRule(longRule));
+    longRule.conditions.resize(4);
+    CHECK(ValidRule(longRule));
+}
+
 static void TestValidation()
 {
     CHECK(ValidCondition(Cond(COND_QUALITY, OP_AT_MOST, 7)));
@@ -311,9 +422,12 @@ static void TestValidation()
     Rule none = ok;
     none.conditions.clear();
     CHECK(!ValidRule(none));
-    Rule five = ok;
-    five.conditions.assign(5, Cond(COND_QUALITY, OP_IS, 1));
-    CHECK(!ValidRule(five));
+    Rule eight = ok;
+    eight.conditions.assign(8, Cond(COND_QUALITY, OP_IS, 1));
+    CHECK(ValidRule(eight));
+    Rule nine = ok;
+    nine.conditions.assign(9, Cond(COND_QUALITY, OP_IS, 1));
+    CHECK(!ValidRule(nine));
 }
 
 static void TestCodec()
@@ -339,7 +453,7 @@ static void TestCodec()
 
     Rule r = MakeRule(7, ACTION_DISENCHANT, conds);
     r.position = 3;
-    CHECK(EncodeRule(r) == "7|3|2|1|0:2:2:0:;1:2:150:0:");
+    CHECK(EncodeRule(r) == "7|3|2|1|0:2:2:0:;1:2:150:0:|0");
 
     Rule back;
     std::vector<std::string> f = Split("R|" + EncodeRule(r), '|');
@@ -366,10 +480,10 @@ static void TestCodec()
     CHECK(!DecodeConditions("0:0::0:", out));
     CHECK(!DecodeConditions("2:1:4294967296:0:", out));
     CHECK(!DecodeConditions("0:0:1:0", out));
-    CHECK(!DecodeConditions(
-        "0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:", out));
-    CHECK(DecodeConditions("0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:", out)
-        && out.size() == 4);
+    CHECK(!DecodeConditions("0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:;"
+        "0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:", out));
+    CHECK(DecodeConditions("0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:",
+        out) && out.size() == 5);
 
     std::vector<std::string> bad = Split("R|7|3|5|1|0:0:1:0:", '|');
     CHECK(!DecodeRule(bad, 1, back));
@@ -671,6 +785,7 @@ int main()
     TestMatching();
     TestEvaluate();
     TestFallThrough();
+    TestGroups();
     TestValidation();
     TestCodec();
     TestOrdering();

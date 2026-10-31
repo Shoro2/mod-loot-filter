@@ -292,10 +292,10 @@ namespace
         {
             trans->Append(
                 "INSERT INTO character_loot_filter_rule "
-                "(ruleId, characterId, position, action, enabled) "
-                "VALUES ({}, {}, {}, {}, {})",
+                "(ruleId, characterId, position, action, enabled, logic) "
+                "VALUES ({}, {}, {}, {}, {}, {})",
                 rule.id, guid, rule.position, rule.action,
-                rule.enabled ? 1 : 0);
+                rule.enabled ? 1 : 0, rule.logic);
             for (std::size_t i = 0; i < rule.conditions.size(); ++i)
             {
                 LFR::Condition const& c = rule.conditions[i];
@@ -303,9 +303,10 @@ namespace
                 CharacterDatabase.EscapeString(text);
                 trans->Append(
                     "INSERT INTO character_loot_filter_condition "
-                    "(ruleId, slot, type, op, value, value2, text) "
-                    "VALUES ({}, {}, {}, {}, {}, {}, '{}')",
-                    rule.id, i, c.type, c.op, c.value, c.value2, text);
+                    "(ruleId, slot, grp, type, op, value, value2, text) "
+                    "VALUES ({}, {}, {}, {}, {}, {}, {}, '{}')",
+                    rule.id, i, c.group, c.type, c.op, c.value, c.value2,
+                    text);
             }
         }
         CharacterDatabase.CommitTransaction(trans);
@@ -356,7 +357,7 @@ namespace
 
         if (QueryResult result = CharacterDatabase.Query(
             "SELECT r.ruleId, r.position, r.action, r.enabled, c.slot, c.type, "
-            "c.op, c.value, c.value2, c.text "
+            "c.op, c.value, c.value2, c.text, r.logic, c.grp "
             "FROM character_loot_filter_rule AS r "
             "LEFT JOIN character_loot_filter_condition AS c "
             "ON c.ruleId = r.ruleId WHERE r.characterId = {} "
@@ -373,6 +374,7 @@ namespace
                     rule.position = f[1].Get<uint8>();
                     rule.action = f[2].Get<uint8>();
                     rule.enabled = f[3].Get<uint8>() != 0;
+                    rule.logic = f[10].Get<uint8>();
                     st.rules.push_back(std::move(rule));
                 }
                 if (f[4].IsNull())
@@ -383,6 +385,7 @@ namespace
                 c.value = f[7].Get<uint32>();
                 c.value2 = f[8].Get<uint32>();
                 c.text = f[9].Get<std::string>();
+                c.group = f[11].Get<uint8>();
                 st.rules.back().conditions.push_back(std::move(c));
             } while (result->NextRow());
         }
@@ -949,7 +952,8 @@ namespace
             case 'R':
             {
                 LFR::Rule rule;
-                if (f.size() != 6 || !LFR::DecodeRule(f, 1, rule))
+                if ((f.size() != 6 && f.size() != 7)
+                    || !LFR::DecodeRule(f, 1, rule))
                 {
                     out("!|invalid");
                     break;
@@ -980,6 +984,7 @@ namespace
                     }
                     existing->action = rule.action;
                     existing->enabled = rule.enabled;
+                    existing->logic = rule.logic;
                     existing->conditions = std::move(rule.conditions);
                     if (pos && pos != existing->position)
                         LFR::Move(st.rules, rule.id, pos);

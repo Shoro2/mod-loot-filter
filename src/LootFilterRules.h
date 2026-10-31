@@ -19,9 +19,21 @@
 
 namespace LootFilterRules
 {
-    constexpr std::size_t MAX_CONDITIONS = 4;
+    constexpr std::size_t MAX_CONDITIONS = 8;   // per rule, all groups
+    constexpr std::size_t MAX_GROUPS = 3;
+    // The 2026-10-09 migration cut old rule groups to four conditions;
+    // kept so it reads the same rows the same way.
+    constexpr std::size_t LEGACY_MAX_CONDITIONS = 4;
     constexpr std::size_t MAX_TEXT = 40;
     constexpr std::size_t MAX_MESSAGE = 250;
+    // An encoded rule must fit one addon message both ways ("R|" + rule
+    // behind the 5-byte prefix, the core's ids being longer than the 0 a
+    // new rule is sent with).
+    constexpr std::size_t MAX_RULE_TEXT = 220;
+    // Rule logic bits: bit g = group g matches when ANY of its conditions
+    // does (else all); LOGIC_JOIN_ANY = the rule matches when any group does
+    // (else all groups).
+    constexpr uint32 LOGIC_JOIN_ANY = 0x10;
     constexpr uint32 ANY_SUBCLASS = 255;
     constexpr uint32 MAX_QUALITY = 7;
     constexpr uint32 MAX_ITEM_LEVEL = 65535;
@@ -79,6 +91,7 @@ namespace LootFilterRules
         uint32 value = 0;
         uint32 value2 = 0;
         std::string text;
+        uint8 group = 0;        // 0..MAX_GROUPS-1, conditions sorted by it
     };
 
     struct Rule
@@ -87,6 +100,7 @@ namespace LootFilterRules
         uint8 position = 0;     // 1-based evaluation order
         uint8 action = ACTION_KEEP;
         bool enabled = true;
+        uint8 logic = 0;        // LOGIC_* bits; 0 = every condition must match
         std::vector<Condition> conditions;
     };
 
@@ -179,6 +193,48 @@ namespace LootFilterRules
         }
     }
 
+    inline std::size_t GroupCount(Rule const& rule)
+    {
+        return rule.conditions.empty() ? 0
+            : std::size_t(rule.conditions.back().group) + 1;
+    }
+
+    // Each group is all (AND) or any (OR) of its conditions; the groups are
+    // joined with all or any. One group in "all" mode is the plain AND list.
+    inline bool RuleMatches(Rule const& rule, ItemFacts const& item)
+    {
+        std::size_t const groups = GroupCount(rule);
+        if (!groups)
+            return false;
+        bool const joinAny = (rule.logic & LOGIC_JOIN_ANY) != 0;
+        for (std::size_t g = 0; g < groups; ++g)
+        {
+            bool const any = (rule.logic & (1u << g)) != 0;
+            bool hit = !any;
+            for (Condition const& c : rule.conditions)
+            {
+                if (c.group != g)
+                    continue;
+                bool const m = Matches(c, item);
+                if (any && m)
+                {
+                    hit = true;
+                    break;
+                }
+                if (!any && !m)
+                {
+                    hit = false;
+                    break;
+                }
+            }
+            if (joinAny && hit)
+                return true;
+            if (!joinAny && !hit)
+                return false;
+        }
+        return !joinAny;
+    }
+
     inline bool Applies(uint8 action, ItemFacts const& item)
     {
         switch (action)
@@ -213,17 +269,7 @@ namespace LootFilterRules
                 || !(allowedMask & (1u << rule.action)))
                 continue;
 
-            bool all = true;
-            for (Condition const& c : rule.conditions)
-            {
-                if (!Matches(c, item))
-                {
-                    all = false;
-                    break;
-                }
-            }
-
-            if (!all)
+            if (!RuleMatches(rule, item))
                 continue;
 
             if (Applies(rule.action, item))
@@ -287,13 +333,33 @@ namespace LootFilterRules
         }
     }
 
+    inline std::string EncodeRule(Rule const& r);
+
+    // Groups are numbered 0, 1, 2 in order without gaps and none is empty;
+    // logic bits exist only for the groups in use.
     inline bool ValidRule(Rule const& rule)
     {
         if (rule.action >= ACTION_COUNT || rule.conditions.empty()
             || rule.conditions.size() > MAX_CONDITIONS)
             return false;
-        return std::all_of(rule.conditions.begin(), rule.conditions.end(),
-            ValidCondition);
+        if (!std::all_of(rule.conditions.begin(), rule.conditions.end(),
+            ValidCondition))
+            return false;
+        uint8 expected = 0;
+        for (Condition const& c : rule.conditions)
+        {
+            if (c.group == expected + 1)
+                ++expected;
+            else if (c.group != expected)
+                return false;
+        }
+        if (rule.conditions.front().group != 0
+            || std::size_t(expected) + 1 > MAX_GROUPS)
+            return false;
+        uint32 const allowed = ((1u << (expected + 1)) - 1) | LOGIC_JOIN_ANY;
+        if (rule.logic & ~allowed)
+            return false;
+        return EncodeRule(rule).size() <= MAX_RULE_TEXT;
     }
 
     // ---------------------------------------------------------------
@@ -335,28 +401,37 @@ namespace LootFilterRules
         }
     }
 
+    // "type:op:value:value2:text:group"; a group 0 condition leaves out
+    // ":0", which is also how a message without groups reads.
     inline std::string EncodeCondition(Condition const& c)
     {
-        return std::to_string(c.type) + ":" + std::to_string(c.op) + ":"
-            + std::to_string(c.value) + ":" + std::to_string(c.value2) + ":"
-            + c.text;
+        std::string s = std::to_string(c.type) + ":" + std::to_string(c.op)
+            + ":" + std::to_string(c.value) + ":" + std::to_string(c.value2)
+            + ":" + c.text;
+        if (c.group)
+            s += ":" + std::to_string(c.group);
+        return s;
     }
 
     inline bool DecodeCondition(std::string const& s, Condition& out)
     {
         std::vector<std::string> const f = Split(s, ':');
-        if (f.size() != 5)
+        if (f.size() != 5 && f.size() != 6)
             return false;
         uint32 type = 0;
         uint32 op = 0;
+        uint32 group = 0;
         Condition c;
         if (!ParseUInt(f[0], 255, type) || !ParseUInt(f[1], 255, op)
             || !ParseUInt(f[2], 0xFFFFFFFFu, c.value)
-            || !ParseUInt(f[3], 0xFFFFFFFFu, c.value2))
+            || !ParseUInt(f[3], 0xFFFFFFFFu, c.value2)
+            || (f.size() == 6
+                && !ParseUInt(f[5], uint32(MAX_GROUPS - 1), group)))
             return false;
         c.type = static_cast<uint8>(type);
         c.op = static_cast<uint8>(op);
         c.text = f[4];
+        c.group = static_cast<uint8>(group);
         if (!ValidCondition(c))
             return false;
         out = std::move(c);
@@ -395,15 +470,16 @@ namespace LootFilterRules
         return true;
     }
 
-    // "id|position|action|enabled|conditions"
+    // "id|position|action|enabled|conditions|logic"
     inline std::string EncodeRule(Rule const& r)
     {
         return std::to_string(r.id) + "|" + std::to_string(r.position) + "|"
             + std::to_string(r.action) + "|" + (r.enabled ? "1" : "0") + "|"
-            + EncodeConditions(r.conditions);
+            + EncodeConditions(r.conditions) + "|" + std::to_string(r.logic);
     }
 
-    // Reads the five rule fields starting at f[at].
+    // Reads the rule fields starting at f[at]: five, or six with the logic
+    // (a message from before the groups has five; logic 0 = all AND).
     inline bool DecodeRule(std::vector<std::string> const& f, std::size_t at,
         Rule& out)
     {
@@ -412,16 +488,19 @@ namespace LootFilterRules
         uint32 position = 0;
         uint32 action = 0;
         uint32 enabled = 0;
+        uint32 logic = 0;
         Rule r;
         if (!ParseUInt(f[at], 0xFFFFFFFFu, r.id)
             || !ParseUInt(f[at + 1], 255, position)
             || !ParseUInt(f[at + 2], 255, action)
             || !ParseUInt(f[at + 3], 1, enabled)
-            || !DecodeConditions(f[at + 4], r.conditions))
+            || !DecodeConditions(f[at + 4], r.conditions)
+            || (f.size() > at + 5 && !ParseUInt(f[at + 5], 255, logic)))
             return false;
         r.position = static_cast<uint8>(position);
         r.action = static_cast<uint8>(action);
         r.enabled = enabled != 0;
+        r.logic = static_cast<uint8>(logic);
         if (!ValidRule(r))
             return false;
         out = std::move(r);
@@ -820,9 +899,9 @@ namespace LootFilterRules
                 ++result.dropped;
                 continue;
             }
-            if (conds.size() > MAX_CONDITIONS)
+            if (conds.size() > LEGACY_MAX_CONDITIONS)
             {
-                conds.resize(MAX_CONDITIONS);
+                conds.resize(LEGACY_MAX_CONDITIONS);
                 enabled = false;
             }
 
