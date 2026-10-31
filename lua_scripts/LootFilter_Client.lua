@@ -877,6 +877,7 @@ posOf:SetPoint("LEFT", posDropdown, "RIGHT", -12, 2)
 
 local whenText = Text(editor, "GameFontNormal")
 whenText:SetPoint("TOPLEFT", 12, -44)
+whenText:SetText("When an item matches")
 
 local condRows = {}
 LF.condRows = condRows
@@ -923,7 +924,7 @@ LF.ItemIdFromLink = ItemIdFromLink
 
 for i = 1, MAX_CONDITIONS do
 	local row = CreateFrame("Frame", nil, editor)
-	row:SetSize(590, 28)
+	row:SetSize(578, 28)
 	row:SetPoint("TOPLEFT", 4, -60 - (i - 1) * 30)
 	row.index = i
 
@@ -1192,7 +1193,7 @@ for g = 0, MAX_GROUPS - 1 do
 	h.add = Button(h, "+ Condition", 96, 20)
 	h.add:SetPoint("LEFT", h.modeDD, "RIGHT", -6, 2)
 	h.add:SetScript("OnClick", function() LF.AddCondition(g) end)
-	h.remove = IconButton(h, "Interface\\Buttons\\UI-GroupLoot-Pass", "Remove group")
+	h.remove = Button(h, "Remove group", 104, 20)
 	h.remove:SetPoint("RIGHT", -8, 0)
 	h.remove:SetScript("OnClick", function() LF.RemoveGroup(g) end)
 	UIDropDownMenu_Initialize(h.modeDD, function()
@@ -1372,27 +1373,30 @@ RenderEditor = function()
 		end
 	end
 
-	-- Layout: the "When" line, each group's header and rows, "+ Add group", the action.
+	-- Layout: the "When" line (with one group it is the group's header),
+	-- each group's header and rows, "+ Add group", the action.
 	local groups = GroupCount(rule)
+	local y = -66
 	if groups > 1 then
-		whenText:SetText("When an item matches")
+		whenText:Show()
 		joinDD:Show()
 		joinTail:Show()
 		UIDropDownMenu_SetText(joinDD, JoinAny(rule) and "any" or "all")
 	else
-		whenText:SetText("When an item matches")
+		whenText:Hide()
 		joinDD:Hide()
 		joinTail:Hide()
+		y = -40
 	end
 	local full = #rule.conds >= MAX_CONDITIONS
-	local y = -66
 	for g = 0, MAX_GROUPS - 1 do
 		local h = groupHeaders[g]
 		if g < groups then
 			h:ClearAllPoints()
-			h:SetPoint("TOPLEFT", 4, y)
+			h:SetPoint("TOPLEFT", groups > 1 and 4 or 2, y)
 			h:Show()
-			h.label:SetText(groups > 1 and ("Group " .. (g + 1)) or "")
+			h.label:SetWidth(groups > 1 and 64 or 150)
+			h.label:SetText(groups > 1 and ("Group " .. (g + 1)) or "When an item matches")
 			UIDropDownMenu_SetText(h.modeDD, GroupAny(rule, g) and "any of these" or "all of these")
 			if full then h.add:Disable() else h.add:Enable() end
 			if groups > 1 then h.remove:Show() else h.remove:Hide() end
