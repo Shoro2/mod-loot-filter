@@ -632,7 +632,7 @@ local countText = Text(main, "GameFontDisableSmall", "RIGHT")
 countText:SetPoint("TOPRIGHT", -18, -50)
 
 local statusText = Text(main, "GameFontRedSmall", "RIGHT")
-statusText:SetPoint("BOTTOMRIGHT", -18, 16)
+statusText:SetPoint("BOTTOMRIGHT", -30, 16) -- clear of the size grip
 statusText:SetWidth(330)
 
 -- ============================================================
