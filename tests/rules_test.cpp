@@ -205,6 +205,73 @@ static void TestEvaluate()
         == ((1u << ACTION_KEEP) | (1u << ACTION_STORE)));
 }
 
+// A rule whose action cannot handle the item hands it to the next matching
+// rule; the "cursed only" set: keep cursed, disenchant, store, sell the rest.
+static void TestFallThrough()
+{
+    std::vector<Rule> rules;
+    rules.push_back(MakeRule(31, ACTION_KEEP, { Cond(COND_CURSED, OP_IS, 1) }));
+    rules.push_back(MakeRule(32, ACTION_DISENCHANT,
+        { Cond(COND_CURSED, OP_IS, 0) }));
+    rules.push_back(MakeRule(33, ACTION_STORE, { Cond(COND_CURSED, OP_IS, 0) }));
+    rules.push_back(MakeRule(34, ACTION_SELL, { Cond(COND_CURSED, OP_IS, 0) }));
+    Renumber(rules);
+    uint8 const all = AllowedMask(true, true, true);
+
+    ItemFacts gear = Hood();
+    gear.storable = false;
+    Verdict v = Evaluate(rules, gear, all);
+    CHECK(v.result == ACTION_DISENCHANT);
+    CHECK(v.position == 2);
+
+    ItemFacts cursed = gear;
+    cursed.cursed = true;
+    v = Evaluate(rules, cursed, all);
+    CHECK(v.result == ACTION_KEEP);
+    CHECK(v.position == 1);
+
+    ItemFacts cloth = Hood();
+    cloth.itemClass = 7;
+    cloth.disenchantable = false;
+    v = Evaluate(rules, cloth, all);
+    CHECK(v.result == ACTION_STORE);
+    CHECK(v.position == 3);
+
+    ItemFacts junk = Hood();
+    junk.quality = 0;
+    junk.itemClass = 15;
+    junk.disenchantable = false;
+    junk.storable = false;
+    v = Evaluate(rules, junk, all);
+    CHECK(v.result == ACTION_SELL);
+    CHECK(v.position == 4);
+
+    // Nothing can handle it: the first matching rule decides (its own
+    // fallback keeps the item).
+    ItemFacts token = junk;
+    token.sellable = false;
+    v = Evaluate(rules, token, all);
+    CHECK(v.result == ACTION_DISENCHANT);
+    CHECK(v.position == 2);
+
+    // Disenchanting switched off on the server: that rule is skipped.
+    v = Evaluate(rules, gear, AllowedMask(true, false, true));
+    CHECK(v.result == ACTION_SELL);
+    CHECK(v.position == 4);
+
+    // Keep and delete always apply.
+    std::vector<Rule> del;
+    del.push_back(MakeRule(41, ACTION_SELL, { Cond(COND_QUALITY, OP_IS, 2) }));
+    del.push_back(MakeRule(42, ACTION_DELETE, { Cond(COND_QUALITY, OP_IS, 2) }));
+    Renumber(del);
+    ItemFacts noPrice = Hood();
+    noPrice.sellable = false;
+    v = Evaluate(del, noPrice, all);
+    CHECK(v.result == ACTION_DELETE);
+    CHECK(v.position == 2);
+    CHECK(Applies(ACTION_KEEP, token) && Applies(ACTION_DELETE, token));
+}
+
 static void TestValidation()
 {
     CHECK(ValidCondition(Cond(COND_QUALITY, OP_AT_MOST, 7)));
@@ -603,6 +670,7 @@ int main()
 {
     TestMatching();
     TestEvaluate();
+    TestFallThrough();
     TestValidation();
     TestCodec();
     TestOrdering();

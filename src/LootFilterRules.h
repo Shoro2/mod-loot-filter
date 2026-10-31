@@ -102,6 +102,11 @@ namespace LootFilterRules
         bool cursed = false;
         bool questItem = false;
         std::string name;
+        // Whether an action can do its job on this item; a rule whose action
+        // cannot passes the item on to the next matching rule.
+        bool sellable = true;       // vendor price, and the gold cap allows it
+        bool disenchantable = true; // has a disenchant loot id
+        bool storable = true;       // the Endless Storage takes it
     };
 
     struct Verdict
@@ -174,8 +179,22 @@ namespace LootFilterRules
         }
     }
 
+    inline bool Applies(uint8 action, ItemFacts const& item)
+    {
+        switch (action)
+        {
+            case ACTION_SELL:       return item.sellable;
+            case ACTION_DISENCHANT: return item.disenchantable;
+            case ACTION_STORE:      return item.storable;
+            default:                return true;
+        }
+    }
+
     // `rules` must be in position order. Quest items are never touched; a
     // rule is skipped when it is off, empty, or its action is not allowed.
+    // The first matching rule whose action can handle the item decides. When
+    // no matching rule can, the first matching one decides and its action's
+    // fallback applies (to the storage if possible, else kept).
     inline Verdict Evaluate(std::vector<Rule> const& rules,
         ItemFacts const& item, uint8 allowedMask)
     {
@@ -186,6 +205,7 @@ namespace LootFilterRules
             return verdict;
         }
 
+        Verdict firstMatch;
         for (Rule const& rule : rules)
         {
             if (!rule.enabled || rule.conditions.empty()
@@ -203,15 +223,23 @@ namespace LootFilterRules
                 }
             }
 
-            if (all)
+            if (!all)
+                continue;
+
+            if (Applies(rule.action, item))
             {
                 verdict.result = rule.action;
                 verdict.position = rule.position;
                 return verdict;
             }
+            if (firstMatch.result == RESULT_NO_RULE)
+            {
+                firstMatch.result = rule.action;
+                firstMatch.position = rule.position;
+            }
         }
 
-        return verdict;
+        return firstMatch;
     }
 
     // ---------------------------------------------------------------

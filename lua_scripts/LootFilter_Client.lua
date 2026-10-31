@@ -32,13 +32,13 @@ local ACTIONS = {
 	[0] = { label = "Keep", badge = "KEEP", color = "4ce04c", border = { 0.17, 0.43, 0.17 },
 		help = "Stays in your bags. Use it to protect items from the rules below." },
 	[1] = { label = "Sell", badge = "SELL", color = "ffcc33", border = { 0.48, 0.39, 0.09 },
-		help = "You get the vendor price at once." },
+		help = "You get the vendor price at once. No vendor price: on to the next rule." },
 	[2] = { label = "Disenchant", badge = "DISENCHANT", color = "c79bff", border = { 0.36, 0.25, 0.53 },
-		help = "Materials go to your Endless Storage. Items that cannot be disenchanted are kept." },
+		help = "Materials go to your Endless Storage. Not disenchantable: on to the next rule." },
 	[3] = { label = "Delete", badge = "DELETE", color = "ff5a5a", border = { 0.49, 0.15, 0.15 },
 		help = "Destroyed. This cannot be undone." },
 	[4] = { label = "To storage", badge = "TO STORAGE", color = "4fd6d6", border = { 0.16, 0.42, 0.42 },
-		help = "Trade goods, gems, recipes and food go to the Endless Storage; the rest stays." },
+		help = "Mats, gems, recipes and food go to the Endless Storage. Others: on to the next rule." },
 	[5] = { label = "No rule", badge = "NO RULE", color = "9a9ab0", border = { 0.23, 0.24, 0.33 } },
 	[6] = { label = "Protected", badge = "PROTECTED", color = "9a9ab0", border = { 0.23, 0.24, 0.33 } },
 }
@@ -627,7 +627,7 @@ local ROW_H, VISIBLE_RULES = 34, 8
 
 local rulesHint = Text(rulesPanel, "GameFontDisableSmall")
 rulesHint:SetPoint("TOPLEFT", 2, -2)
-rulesHint:SetText("Checked from top to bottom. The first rule that matches decides. Quest items are never touched.")
+rulesHint:SetText("Top to bottom: the first matching rule that can handle the item decides. Quest items are never touched.")
 
 local listBox = Panel(rulesPanel)
 listBox:SetPoint("TOPLEFT", 0, -18)
@@ -1504,7 +1504,7 @@ local function UpdateTest()
 			for _, r in ipairs(M.rules) do
 				if r.position == t.position then rule = r end
 			end
-			local before = t.position > 1 and (" · rules 1 to " .. (t.position - 1) .. " did not match") or ""
+			local before = t.position > 1 and (" · rules 1 to " .. (t.position - 1) .. " did not apply") or ""
 			testRuleText:SetText((rule and LF.RuleText(rule) or "") .. before)
 		end
 		if not M.enabled then

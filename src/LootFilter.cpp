@@ -129,21 +129,6 @@ namespace
             || proto->StartQuest != 0;
     }
 
-    LFR::ItemFacts Facts(Item const* item, ItemTemplate const* proto)
-    {
-        LFR::ItemFacts f;
-        f.entry = proto->ItemId;
-        f.quality = proto->Quality;
-        f.itemLevel = proto->ItemLevel;
-        f.sellPrice = proto->SellPrice;
-        f.itemClass = proto->Class;
-        f.subClass = proto->SubClass;
-        f.cursed = IsParagonCursedItem(item);
-        f.questItem = IsQuestItem(proto);
-        f.name = proto->Name1;
-        return f;
-    }
-
     // Same predicate as mod-endless-storage: recipes, stackable food,
     // stackable trade goods and gems.
     bool IsStorageEligible(ItemTemplate const* proto)
@@ -158,6 +143,29 @@ namespace
             && proto->GetMaxStackSize() > 1)
             return true;
         return false;
+    }
+
+    // The sell check matches Act: the whole stack's price must fit under
+    // the gold cap.
+    LFR::ItemFacts Facts(Player const* player, Item const* item,
+        ItemTemplate const* proto)
+    {
+        LFR::ItemFacts f;
+        f.entry = proto->ItemId;
+        f.quality = proto->Quality;
+        f.itemLevel = proto->ItemLevel;
+        f.sellPrice = proto->SellPrice;
+        f.itemClass = proto->Class;
+        f.subClass = proto->SubClass;
+        f.cursed = IsParagonCursedItem(item);
+        f.questItem = IsQuestItem(proto);
+        f.name = proto->Name1;
+        uint64 const money = uint64(proto->SellPrice) * item->GetCount();
+        f.sellable = money
+            && uint64(player->GetMoney()) + money <= MAX_MONEY_AMOUNT;
+        f.disenchantable = proto->DisenchantID != 0;
+        f.storable = IsStorageEligible(proto);
+        return f;
     }
 
     void DepositToStorage(uint32 guid, ItemTemplate const* proto, uint32 count)
@@ -821,8 +829,8 @@ namespace
                 auto it = s_states.find(player->GetGUID().GetCounter());
                 if (it == s_states.end() || !it->second.filterEnabled)
                     return true;
-                verdict = LFR::Evaluate(it->second.rules, Facts(item, proto),
-                    AllowedMask());
+                verdict = LFR::Evaluate(it->second.rules,
+                    Facts(player, item, proto), AllowedMask());
             }
             if (verdict.result < LFR::ACTION_COUNT)
                 Act(player, item, proto, verdict.result, verdict.position);
@@ -860,13 +868,14 @@ namespace
         return it == st.rules.end() ? nullptr : &*it;
     }
 
-    std::string VerdictText(FilterState const& st, Item const* item)
+    std::string VerdictText(FilterState const& st, Player const* player,
+        Item const* item)
     {
         ItemTemplate const* proto = item->GetTemplate();
         if (!proto)
             return std::to_string(LFR::RESULT_NO_RULE) + "|0";
-        LFR::Verdict const v = LFR::Evaluate(st.rules, Facts(item, proto),
-            AllowedMask());
+        LFR::Verdict const v = LFR::Evaluate(st.rules,
+            Facts(player, item, proto), AllowedMask());
         return std::to_string(v.result) + "|" + std::to_string(v.position);
     }
 
@@ -880,7 +889,7 @@ namespace
             if (!item || !LFR::ServerToClient(bag, slot, cbag, cslot))
                 return;
             out(Acore::StringFormat("S|{}|{}|{}|{}", cbag, cslot,
-                VerdictText(st, item), item->GetEntry()));
+                VerdictText(st, player, item), item->GetEntry()));
             ++count;
         };
 
@@ -1049,7 +1058,7 @@ namespace
                     break;
                 }
                 out(Acore::StringFormat("T|{}|{}|{}|{}", a, b,
-                    VerdictText(st, item), item->GetEntry()));
+                    VerdictText(st, player, item), item->GetEntry()));
                 break;
             }
             case 'S':
