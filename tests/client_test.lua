@@ -161,6 +161,23 @@ AIO = {
 	AddSavedVarChar = function() end,
 }
 
+-- FLUI, the shared window kit (fl-lua-scripts AIO_UI/): just enough to build the window.
+FLUI = { HEADER = 40 }
+function FLUI.Window(name)
+	local f = CreateFrame("Frame", name, UIParent)
+	f.title = f:CreateFontString()
+	f.close = CreateFrame("Button", nil, f)
+	return f
+end
+function FLUI.Panel(parent) return CreateFrame("Frame", nil, parent) end
+function FLUI.Button(parent, text)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetText(text)
+	b.SetSelected = function(self, on) self.selected = on and true or nil end
+	return b
+end
+function FLUI.Hover(parent) return parent:CreateTexture() end
+
 local function last() return wire[#wire] end
 local function openMenu(dd, level, value)
 	menuItems = {}

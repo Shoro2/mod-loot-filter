@@ -14,6 +14,10 @@
 local AIO = AIO or require("AIO")
 if AIO.AddAddon() then return end
 
+-- FLUI (fl-lua-scripts AIO_UI/, the Forgotten Land window kit) draws the
+-- window, its panels and buttons in the player's theme.
+local FLUI = assert(FLUI, "the loot filter needs AIO_UI/FLUI_Client.lua loaded first")
+
 local LF = {}
 LootFilterUI = LF -- global: the command hub and the offline test use it
 
@@ -495,25 +499,16 @@ end
 -- Frame helpers
 -- ============================================================
 
-local BACKDROP = {
-	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	tile = true, tileSize = 16, edgeSize = 16,
-	insets = { left = 4, right = 4, top = 4, bottom = 4 },
-}
-local PANEL_BACKDROP = {
+-- The action badges: a coloured 1px frame around the action's name
+local BADGE_BACKDROP = {
 	bgFile = "Interface\\Buttons\\WHITE8x8",
 	edgeFile = "Interface\\Buttons\\WHITE8x8",
 	edgeSize = 1,
 	insets = { left = 1, right = 1, top = 1, bottom = 1 },
 }
 
-local function Panel(parent)
-	local f = CreateFrame("Frame", nil, parent)
-	f:SetBackdrop(PANEL_BACKDROP)
-	f:SetBackdropColor(0.04, 0.04, 0.09, 0.9)
-	f:SetBackdropBorderColor(0.18, 0.2, 0.38, 1)
-	return f
+local function Panel(parent, opaque)
+	return FLUI.Panel(parent, nil, { opaque = opaque })
 end
 
 local function Text(parent, font, justify)
@@ -523,10 +518,7 @@ local function Text(parent, font, justify)
 end
 
 local function Button(parent, label, width, height)
-	local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-	b:SetSize(width or 90, height or 22)
-	b:SetText(label)
-	return b
+	return FLUI.Button(parent, label, width or 90, height or 22)
 end
 
 local function Tooltip(frame, title, line)
@@ -559,7 +551,7 @@ end
 local function BadgeFrame(parent, width)
 	local f = CreateFrame("Frame", nil, parent)
 	f:SetSize(width or 84, 18)
-	f:SetBackdrop(PANEL_BACKDROP)
+	f:SetBackdrop(BADGE_BACKDROP)
 	f:SetBackdropColor(0, 0, 0, 0)
 	f.text = Text(f, "GameFontNormalSmall", "CENTER")
 	f.text:SetPoint("CENTER", 0, 0)
@@ -584,36 +576,13 @@ end
 
 local FRAME_W, FRAME_H = 640, 560
 
-local main = CreateFrame("Frame", "LootFilterFrame", UIParent)
-main:SetSize(FRAME_W, FRAME_H)
-main:SetPoint("CENTER", 0, 40)
-main:SetBackdrop(BACKDROP)
-main:SetBackdropColor(0.05, 0.05, 0.11, 0.97)
-main:SetBackdropBorderColor(0.33, 0.35, 0.54, 1)
-main:SetFrameStrata("HIGH")
-main:SetToplevel(true)
-main:EnableMouse(true)
-main:SetMovable(true)
-main:SetClampedToScreen(true)
-main:RegisterForDrag("LeftButton")
-main:SetScript("OnDragStart", main.StartMoving)
-main:SetScript("OnDragStop", main.StopMovingOrSizing)
-main:Hide()
-tinsert(UISpecialFrames, "LootFilterFrame")
+-- Movable, ESC closes, position saved per character
+local main = FLUI.Window("LootFilterFrame", {
+	width = FRAME_W, height = FRAME_H, point = { "CENTER", 0, 40 }, strata = "HIGH",
+	title = "Loot Filter", icon = "Interface\\Icons\\INV_Misc_Bag_SatchelofCenarius",
+})
 LF.frame = main
-if AIO.SavePosition then AIO.SavePosition(main, true) end
-
-local icon = main:CreateTexture(nil, "ARTWORK")
-icon:SetSize(24, 24)
-icon:SetPoint("TOPLEFT", 14, -10)
-icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_SatchelofCenarius")
-
-local title = Text(main, "GameFontNormalLarge")
-title:SetPoint("LEFT", icon, "RIGHT", 8, 0)
-title:SetText("Loot Filter")
-
-local closeBtn = CreateFrame("Button", nil, main, "UIPanelCloseButton")
-closeBtn:SetPoint("TOPRIGHT", -4, -4)
+local closeBtn = main.close
 
 local filterBox = CreateFrame("CheckButton", "LootFilterEnabledBox", main, "UICheckButtonTemplate")
 filterBox:SetSize(24, 24)
@@ -641,7 +610,7 @@ local function SelectTab(index)
 		if i == index then p:Show() else p:Hide() end
 	end
 	for i, t in ipairs(tabs) do
-		if i == index then t:LockHighlight() else t:UnlockHighlight() end
+		t:SetSelected(i == index)
 	end
 	Refresh()
 end
@@ -649,7 +618,7 @@ LF.SelectTab = SelectTab
 
 for i, name in ipairs(TAB_NAMES) do
 	local t = Button(main, name, 90, 24)
-	t:SetPoint("TOPLEFT", 14 + (i - 1) * 94, -42)
+	t:SetPoint("TOPLEFT", 14 + (i - 1) * 94, -(FLUI.HEADER + 2))
 	t:SetScript("OnClick", function() SelectTab(i) end)
 	tabs[i] = t
 	local p = CreateFrame("Frame", nil, main)
@@ -717,9 +686,7 @@ for i = 1, VISIBLE_RULES do
 	local bg = row:CreateTexture(nil, "BACKGROUND")
 	bg:SetAllPoints()
 	bg:SetTexture(1, 1, 1, (i % 2 == 0) and 0.04 or 0.0)
-	local hl = row:CreateTexture(nil, "HIGHLIGHT")
-	hl:SetAllPoints()
-	hl:SetTexture(0.3, 0.35, 0.7, 0.18)
+	FLUI.Hover(row)
 
 	row.num = Text(row, "GameFontNormal", "RIGHT")
 	row.num:SetPoint("LEFT", 2, 0)
@@ -852,10 +819,9 @@ end)
 -- Editor (replaces the list in the Rules tab)
 -- ============================================================
 
-local editor = Panel(rulesPanel)
+local editor = Panel(rulesPanel, true)
 editor:SetPoint("TOPLEFT", 0, 0)
 editor:SetPoint("BOTTOMRIGHT", 0, 0)
-editor:SetBackdropColor(0.04, 0.04, 0.09, 1)
 editor:SetFrameLevel(rulesPanel:GetFrameLevel() + 10)
 editor:EnableMouse(true)
 editor:Hide()
