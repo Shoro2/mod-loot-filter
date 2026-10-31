@@ -30,6 +30,21 @@ group none
 place 0 -147.4 -1122.5 35
 require b alive
 do b destroy 3712
+# mod-auto-loot loots nothing with fewer than 4 free bag slots; other scenarios' loot filled this
+# bot's backpack (run 1609, 2026-10-31: 13 of 16 slots), so their leftovers go first.
+do b destroy 5524
+do b destroy 1399
+do b destroy 2649
+do b destroy 7073
+do b destroy 8182
+do b destroy 1372
+do b destroy 4865
+do b destroy 1374
+do b destroy 2656
+do b destroy 4813
+do b destroy 1370
+do b destroy 33629
+do b destroy 36000
 as b .lootfilter request X
 expect output has "LFLS N|0"
 as b .lootfilter request F|1
@@ -136,7 +151,7 @@ as gm .additem 33629
 as gm .additem 36000
 expect b item 33629 == 1
 expect b item 36000 == 1
-wait 2s
+wait 3s
 as b .lootfilter request S
 expect output has "|4|3|3712"
 expect output has "|1|4|33629"
@@ -146,7 +161,7 @@ as b .lootfilter request X
 as b .lootfilter request R|0|0|2|1|5:0:0:0:
 as b .lootfilter request R|0|0|1|1|5:0:0:0:
 expect output has "LFLS N|2"
-wait 2s
+wait 3s
 as b .lootfilter request S
 expect output has "|1|2|3712"
 expect output has "|1|2|33629"
@@ -231,6 +246,8 @@ log 7b - a quest item is never touched, even under a DELETE rule
 as b .lootfilter request F|1
 place 0 705 610 45
 do b destroy 3317
+# a respawn due while the grid was unloaded happens at its first update
+wait 2s
 pick g1 creature:1939 near b
 require g1 alive
 do b approach g1
