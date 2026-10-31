@@ -7,8 +7,10 @@ Rule-based automatic loot filter for an [AzerothCore](https://www.azerothcore.or
 Every looted item is checked against the character's rules and then **kept**, moved **to the Endless
 Storage**, **sold** at the vendor price, **disenchanted**, or **deleted**. A rule is one action plus up to
 four conditions that must all match (quality, item level, sell price, type as class and subclass, cursed,
-a specific item, part of the name). Rules are checked from the top; the first one that matches decides,
-and an item that matches nothing stays in the bags. Quest items are never touched.
+a specific item, part of the name). Rules are checked from the top; the first matching rule whose action
+can handle the item decides (an item without a vendor price, without disenchant loot or that the storage
+does not take goes on to the next matching rule), and an item that matches nothing stays in the bags.
+Quest items are never touched.
 
 Everything is managed in game in one window (`/lf`):
 

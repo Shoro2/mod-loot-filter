@@ -12,8 +12,10 @@
 
 AzerothCore module for **WoW 3.3.5a**: every looted item is checked against the character's rules and then
 kept, stored in the Endless Storage, sold, disenchanted or deleted. A **rule** is one action plus up to
-**four AND-ed conditions**; rules are checked **top to bottom** and the **first match decides**. No match →
-the item stays in the bags. **Quest items are never touched.**
+**four AND-ed conditions**; rules are checked **top to bottom**; the **first matching rule whose action can
+handle the item decides** (`LFR::Applies`: sell needs a price under the gold cap, disenchant a
+`DisenchantID`, to storage a storage-eligible item), otherwise the item goes on to the next matching rule.
+No match → the item stays in the bags. **Quest items are never touched.**
 
 Per character, managed in game in the window `/lf` (Rules / Test / Log tabs).
 
@@ -63,7 +65,8 @@ src/LootFilterRules.h — pure logic: model, matching, codec, ordering, migratio
 
 Actions: **0 Keep** (stays, no deposit) · **1 Sell** · **2 Disenchant** (mats to the Endless Storage) ·
 **3 Delete** · **4 To storage** (storage-eligible items deposited, others stay). Sell price 0, the gold
-cap, or not disenchantable → stored if storage-eligible, else kept (the first version's fallback).
+cap, or not disenchantable → the next matching rule; when no matching rule can handle the item, the
+first one decides and falls back: stored if storage-eligible, else kept (the first version's fallback).
 
 ## Configuration
 
