@@ -373,14 +373,6 @@ static void TestGroups()
     CHECK(!DecodeRule(Split("R|0|0|1|1|0:0:1:0:|2", '|'), 1, back));
     CHECK(!DecodeRule(Split("R|0|0|1|1|0:0:1:0:|x", '|'), 1, back));
 
-    // An encoded rule must fit one addon message.
-    Rule longRule = MakeRule(4000000000u, ACTION_SELL, {});
-    for (int i = 0; i < 8; ++i)
-        longRule.conditions.push_back(Cond(COND_NAME, OP_IS, 0, 0,
-            "abcdefghijklmnopqrstuvwxyz"));
-    CHECK(!ValidRule(longRule));
-    longRule.conditions.resize(4);
-    CHECK(ValidRule(longRule));
 }
 
 static void TestValidation()

@@ -26,10 +26,6 @@ namespace LootFilterRules
     constexpr std::size_t LEGACY_MAX_CONDITIONS = 4;
     constexpr std::size_t MAX_TEXT = 40;
     constexpr std::size_t MAX_MESSAGE = 250;
-    // An encoded rule must fit one addon message both ways ("R|" + rule
-    // behind the 5-byte prefix, the core's ids being longer than the 0 a
-    // new rule is sent with).
-    constexpr std::size_t MAX_RULE_TEXT = 220;
     // Rule logic bits: bit g = group g matches when ANY of its conditions
     // does (else all); LOGIC_JOIN_ANY = the rule matches when any group does
     // (else all groups).
@@ -333,8 +329,6 @@ namespace LootFilterRules
         }
     }
 
-    inline std::string EncodeRule(Rule const& r);
-
     // Groups are numbered 0, 1, 2 in order without gaps and none is empty;
     // logic bits exist only for the groups in use.
     inline bool ValidRule(Rule const& rule)
@@ -357,9 +351,7 @@ namespace LootFilterRules
             || std::size_t(expected) + 1 > MAX_GROUPS)
             return false;
         uint32 const allowed = ((1u << (expected + 1)) - 1) | LOGIC_JOIN_ANY;
-        if (rule.logic & ~allowed)
-            return false;
-        return EncodeRule(rule).size() <= MAX_RULE_TEXT;
+        return (rule.logic & ~allowed) == 0;
     }
 
     // ---------------------------------------------------------------

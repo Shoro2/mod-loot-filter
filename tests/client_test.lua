@@ -215,15 +215,25 @@ check(LF.MoneyText(0) == "0|cffeda55fc|r", "zero money")
 -- ------------------------------------------------------------
 
 local sample = { id = 7, position = 3, action = 2, enabled = true, conds = { C(0, 2, 2), C(1, 2, 150) } }
-check(LF.EncodeRule(sample) == "7|3|2|1|0:2:2:0:;1:2:150:0:", "encode rule")
+check(LF.EncodeRule(sample) == "7|3|2|1|0:2:2:0:;1:2:150:0:|0", "encode rule")
 local back = LF.DecodeRule(LF.Split("R|" .. LF.EncodeRule(sample), "|"), 2)
 check(back and back.id == 7 and back.position == 3 and back.action == 2 and back.enabled, "decode rule")
 check(back and #back.conds == 2 and back.conds[2].value == 150, "decode conditions")
 check(LF.DecodeRule(LF.Split("R|7|3|2|2|0:2:2:0:", "|"), 2) == nil, "reject enabled 2")
 check(LF.DecodeRule(LF.Split("R|7|3|2|1|", "|"), 2) == nil, "reject no conditions")
 check(LF.DecodeRule(LF.Split("R|7|3|2|1|0:2:a:0:", "|"), 2) == nil, "reject bad number")
-check(LF.DecodeRule(LF.Split("R|7|3|2|1|0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:;0:0:1:0:", "|"), 2) == nil,
-	"reject five conditions")
+check(LF.DecodeRule(LF.Split("R|7|3|2|1|" .. string.rep("0:0:1:0:;", 8) .. "0:0:1:0:", "|"), 2) == nil,
+	"reject nine conditions")
+-- Groups (same strings as tests/rules_test.cpp)
+local grouped = LF.DecodeRule(LF.Split("R|51|1|2|1|3:0:4:255:;3:0:2:255:;0:2:2:0::1|1", "|"), 2)
+check(grouped and grouped.logic == 1 and #grouped.conds == 3 and grouped.conds[3].group == 1
+	and grouped.conds[1].group == 0, "decode groups")
+check(grouped and LF.EncodeRule(grouped) == "51|1|2|1|3:0:4:255:;3:0:2:255:;0:2:2:0::1|1", "encode groups")
+check(grouped and LF.RuleText(grouped) == "(Type is Armor |cff8c8ca8or|r Type is Weapon) |cff8c8ca8and|r "
+	.. "Quality at most " .. "|cff1eff00Uncommon|r", "group sentence")
+local old = LF.DecodeRule(LF.Split("R|7|3|2|1|0:2:2:0:", "|"), 2)
+check(old and old.logic == 0 and old.conds[1].group == 0, "five fields read as one AND group")
+check(LF.DecodeRule(LF.Split("R|7|3|2|1|0:2:2:0::3|0", "|"), 2) == nil, "reject group 4")
 local named = LF.DecodeRule(LF.Split("R|9|1|0|1|7:0:0:0:Frozen Orb's", "|"), 2)
 check(named and named.conds[1].text == "Frozen Orb's", "decode name")
 check(LF.ToUInt("4294967296") == nil and LF.ToUInt("12") == 12 and LF.ToUInt("-1") == nil, "ToUInt")
@@ -239,6 +249,12 @@ check(LF.RuleProblem({ action = 1, conds = { C(7, 0, 0, 0, string.rep("a", 41)) 
 check(LF.RuleProblem({ action = 1, conds = { C(1, 2, -1) } }) ~= nil, "empty item level")
 check(has(LF.RuleProblem({ action = 1, conds = { C(6, 0, 0) } }), "Shift-click"), "item not picked")
 check(LF.RuleProblem({ action = 1, conds = { C(0, 0, 2) } }) == nil, "valid rule")
+local function G(c, g) c.group = g; return c end
+check(has(LF.RuleProblem({ action = 1, conds = { C(0, 0, 2), G(C(0, 0, 3), 2) } }), "group"), "group gap")
+check(has(LF.RuleProblem({ action = 1, conds = { G(C(0, 0, 2), 1) } }), "group"), "no first group")
+local wordy = { id = 4294967295, position = 255, action = 4, enabled = true, logic = 0, conds = {} }
+for i = 1, 5 do wordy.conds[i] = C(7, 0, 0, 0, string.rep("w", 40)) end
+check(has(LF.RuleProblem(wordy), "too long"), "too long for one message")
 M.allow[3] = false
 check(has(LF.RuleProblem({ action = 3, conds = { C(0, 0, 2) } }), "switched off"), "disabled action")
 M.allow[3] = true
@@ -314,14 +330,14 @@ check(crow[2].number:IsShown() and not crow[2].valueDD:IsShown(), "number box fo
 crow[2].number.text = "150"
 crow[2].number.scripts.OnTextChanged(crow[2].number, true)
 check(E.rule.conds[2].value == 150, "typed item level")
-check(LF.SaveEditor() and last() == "R|0|3|1|1|0:0:2:0:;1:2:150:0:", "save new rule")
+check(LF.SaveEditor() and last() == "R|0|3|1|1|0:0:2:0:;1:2:150:0:|0", "save new rule")
 check(not LF.editorFrame:IsShown(), "editor closed after save")
 
 LF.OpenEditor(M.rules[1])
 check(E.rule.id == 11 and E.rule ~= M.rules[1], "edit works on a copy")
 pick(openMenu(LootFilterPositionDropdown), "2").func()
 check(E.rule.position == 2, "position menu")
-check(LF.SaveEditor() and last() == "R|11|2|1|1|0:0:0:0:", "save edited rule")
+check(LF.SaveEditor() and last() == "R|11|2|1|1|0:0:0:0:|0", "save edited rule")
 
 LF.OpenEditor(nil)
 pick(openMenu(crow[1].typeDD), "Name contains").func()
@@ -329,7 +345,7 @@ check(crow[1].textBox:IsShown(), "name box")
 check(LF.SaveEditor() == false and has(E.error, "name"), "empty name refused")
 crow[1].textBox.text = "  Frozen Orb  "
 crow[1].textBox.scripts.OnTextChanged(crow[1].textBox, true)
-check(LF.SaveEditor() and last() == "R|0|3|1|1|7:0:0:0:Frozen Orb", "name trimmed and saved")
+check(LF.SaveEditor() and last() == "R|0|3|1|1|7:0:0:0:Frozen Orb|0", "name trimmed and saved")
 
 LF.OpenEditor(nil)
 pick(openMenu(crow[1].typeDD), "Type").func()
@@ -341,6 +357,39 @@ pick(subs, "Cloth").func()
 check(E.rule.conds[1].value == 4 and E.rule.conds[1].value2 == 1, "subclass picked")
 check(crow[1].valueDD.ddtext == "Armor » Cloth", "type shown")
 check(crow[1].opDD.ddEnabled == false, "no operator for type")
+LF.CloseEditor()
+
+-- Groups in the editor: (Armor or Weapon) and Quality at most green.
+LF.OpenEditor(nil)
+pick(openMenu(crow[1].typeDD), "Type").func()
+check(LF.groupHeaders[0]:IsShown() and not LF.groupHeaders[1]:IsShown() and not LF.joinDD:IsShown(),
+	"one group: no join line")
+LF.groupHeaders[0].add.scripts.OnClick()
+check(#E.rule.conds == 2 and E.rule.conds[2].group == 0, "+ Condition adds to the group")
+pick(openMenu(crow[2].typeDD), "Type").func()
+check(E.rule.conds[2].group == 0, "a new type keeps the group")
+pick(openMenu(crow[2].valueDD, 1), "Weapon").func()
+pick(openMenu(LF.groupHeaders[0].modeDD), "any of these").func()
+check(E.rule.logic == 1, "group mode any")
+LF.addGroupBtn.scripts.OnClick()
+check(#E.rule.conds == 3 and E.rule.conds[3].group == 1 and LF.groupHeaders[1]:IsShown(), "+ Add group")
+check(LF.joinDD:IsShown() and LF.joinDD.ddtext == "all", "two groups: join line")
+pick(openMenu(crow[3].opDD), "at most").func()
+check(LF.SaveEditor() and last() == "R|0|3|1|1|3:0:4:255:;3:0:2:255:;0:2:2:0::1|1", "save grouped rule")
+
+LF.OpenEditor(LF.DecodeRule(LF.Split("R|51|1|2|1|3:0:4:255:;3:0:2:255:;0:2:2:0::1;5:0:0:0::2|17", "|"), 2))
+check(LF.GroupCount(E.rule) == 3 and LF.groupHeaders[2]:IsShown() and not LF.addGroupBtn:IsShown(),
+	"three groups: no more groups")
+pick(openMenu(LF.joinDD), "any").func()
+check(E.rule.logic == 17, "join any kept")
+LF.groupHeaders[1].remove.scripts.OnClick()
+check(#E.rule.conds == 3 and E.rule.conds[3].group == 1 and E.rule.conds[3].type == 5, "group 3 moves up")
+check(E.rule.logic == 17, "bits follow the groups")
+crow[3].remove.scripts.OnClick()
+check(#E.rule.conds == 2 and LF.GroupCount(E.rule) == 1 and E.rule.logic == 1, "last group gone: no join")
+for _ = 1, 6 do LF.groupHeaders[0].add.scripts.OnClick() end
+check(#E.rule.conds == 8 and LF.groupHeaders[0].add.enabled == false and LF.addGroupBtn.enabled == false,
+	"eight conditions: full")
 LF.CloseEditor()
 
 LF.OpenTemplate(5)
@@ -355,7 +404,7 @@ pick(openMenu(crow[1].typeDD), "Item").func()
 crow[1].itemBox:SetFocus()
 check(ChatEdit_InsertLink(Link(1001)) == true and E.rule.conds[1].value == 1001, "shift-click into item box")
 check(has(crow[1].itemBox:GetText(), "Vrykul"), "item box shows the item")
-check(LF.SaveEditor() and last() == "R|0|3|1|1|6:0:1001:0:", "save item rule")
+check(LF.SaveEditor() and last() == "R|0|3|1|1|6:0:1001:0:|0", "save item rule")
 
 -- Drop an item on the box.
 LF.OpenEditor(nil)
@@ -424,7 +473,7 @@ check(last() == "C|0" and M.chatMode == 0, "chat mode")
 -- Limits and entry points
 -- ------------------------------------------------------------
 
-local longest = { id = 4294967295, position = 255, action = 4, enabled = true, conds = {} }
+local longest = { id = 4294967295, position = 255, action = 4, enabled = true, logic = 0, conds = {} }
 for i = 1, 4 do longest.conds[i] = C(7, 0, 0, 0, string.rep("w", 40)) end
 LF.Send("R|" .. LF.EncodeRule(longest)) -- the mock asserts the 255-byte limit
 check(true, "longest rule fits")

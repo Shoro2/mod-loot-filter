@@ -23,8 +23,11 @@ LootFilterUI = LF -- global: the command hub and the offline test use it
 
 local PREFIX_OUT = "LFLT"
 local PREFIX_IN = "LFLS"
-local MAX_CONDITIONS = 4
+local MAX_CONDITIONS = 8 -- per rule, all groups together
+local MAX_GROUPS = 3
+local LOGIC_JOIN_ANY = 16 -- rule logic: bit g = group g needs any one condition; 16 = any group is enough
 local MAX_TEXT = 40
+local MAX_MESSAGE = 250 -- an addon message: prefix + tab + this many bytes
 local MAX_LOG = 100
 local ANY_SUBCLASS = 255
 
@@ -236,10 +239,38 @@ function LF.CondText(c)
 	return "?"
 end
 
+local function HasBit(v, bit)
+	return math.floor((v or 0) / bit) % 2 == 1
+end
+LF.HasBit = HasBit
+
+local function GroupCount(rule)
+	local n = 0
+	for _, c in ipairs(rule.conds) do
+		if (c.group or 0) + 1 > n then n = (c.group or 0) + 1 end
+	end
+	return n
+end
+LF.GroupCount = GroupCount
+
+local function GroupAny(rule, g) return HasBit(rule.logic, 2 ^ g) end
+local function JoinAny(rule) return HasBit(rule.logic, LOGIC_JOIN_ANY) end
+LF.GroupAny, LF.JoinAny = GroupAny, JoinAny
+
+-- "A and B", or with groups "(A or B) and C".
 function LF.RuleText(rule)
+	local groups = GroupCount(rule)
 	local parts = {}
-	for i, c in ipairs(rule.conds) do parts[i] = LF.CondText(c) end
-	return table.concat(parts, " " .. Colored("8c8ca8", "and") .. " ")
+	for g = 0, groups - 1 do
+		local conds = {}
+		for _, c in ipairs(rule.conds) do
+			if (c.group or 0) == g then conds[#conds + 1] = LF.CondText(c) end
+		end
+		local text = table.concat(conds, " " .. Colored("8c8ca8", GroupAny(rule, g) and "or" or "and") .. " ")
+		if groups > 1 and #conds > 1 then text = "(" .. text .. ")" end
+		parts[#parts + 1] = text
+	end
+	return table.concat(parts, " " .. Colored("8c8ca8", JoinAny(rule) and "or" or "and") .. " ")
 end
 
 function LF.Badge(code)
@@ -252,32 +283,40 @@ end
 -- Codec (mirror of LootFilterRules.h)
 -- ============================================================
 
+-- "type:op:value:value2:text", plus ":group" for groups after the first
 function LF.EncodeCond(c)
-	return c.type .. ":" .. c.op .. ":" .. (c.value or 0) .. ":" .. (c.value2 or 0) .. ":" .. (c.text or "")
+	local s = c.type .. ":" .. c.op .. ":" .. (c.value or 0) .. ":" .. (c.value2 or 0) .. ":" .. (c.text or "")
+	if (c.group or 0) > 0 then s = s .. ":" .. c.group end
+	return s
 end
 
+-- "id|position|action|enabled|conditions|logic"
 function LF.EncodeRule(r)
 	local conds = {}
 	for i, c in ipairs(r.conds) do conds[i] = LF.EncodeCond(c) end
-	return r.id .. "|" .. (r.position or 0) .. "|" .. r.action .. "|" .. (r.enabled and 1 or 0) .. "|"
-		.. table.concat(conds, ";")
+	return (r.id or 0) .. "|" .. (r.position or 0) .. "|" .. r.action .. "|" .. (r.enabled and 1 or 0) .. "|"
+		.. table.concat(conds, ";") .. "|" .. (r.logic or 0)
 end
 
 function LF.DecodeCond(s)
 	local f = Split(s, ":")
-	if #f ~= 5 then return nil end
+	if #f ~= 5 and #f ~= 6 then return nil end
 	local c = { type = ToUInt(f[1], 255), op = ToUInt(f[2], 255), value = ToUInt(f[3]),
-		value2 = ToUInt(f[4]), text = f[5] }
-	if not (c.type and c.op and c.value and c.value2) then return nil end
+		value2 = ToUInt(f[4]), text = f[5], group = 0 }
+	if f[6] then c.group = ToUInt(f[6], MAX_GROUPS - 1) end
+	if not (c.type and c.op and c.value and c.value2 and c.group) then return nil end
 	return c
 end
 
--- f = the message split by "|"; the five rule fields start at f[i].
+-- f = the message split by "|"; the rule fields start at f[i] (five, or six with the logic).
 function LF.DecodeRule(f, i)
 	if #f < i + 4 then return nil end
 	local r = { id = ToUInt(f[i]), position = ToUInt(f[i + 1], 255), action = ToUInt(f[i + 2], 255),
-		enabled = f[i + 3] == "1", conds = {} }
-	if not (r.id and r.position and r.action) or (f[i + 3] ~= "0" and f[i + 3] ~= "1") then return nil end
+		enabled = f[i + 3] == "1", conds = {}, logic = 0 }
+	if f[i + 5] then r.logic = ToUInt(f[i + 5], 255) end
+	if not (r.id and r.position and r.action and r.logic) or (f[i + 3] ~= "0" and f[i + 3] ~= "1") then
+		return nil
+	end
 	if f[i + 4] == "" then return nil end
 	for _, part in ipairs(Split(f[i + 4], ";")) do
 		local c = LF.DecodeCond(part)
@@ -325,13 +364,22 @@ end
 
 function LF.RuleProblem(rule)
 	if #rule.conds < 1 then return "Add at least one condition." end
-	if #rule.conds > MAX_CONDITIONS then return "A rule has at most four conditions." end
+	if #rule.conds > MAX_CONDITIONS then return "A rule has at most eight conditions." end
+	local expected = 0
+	for _, c in ipairs(rule.conds) do
+		local g = c.group or 0
+		if g == expected + 1 then expected = g elseif g ~= expected then return "Every group needs a condition." end
+	end
+	if (rule.conds[1].group or 0) ~= 0 or expected + 1 > MAX_GROUPS then return "A rule has at most three groups." end
 	for _, c in ipairs(rule.conds) do
 		local problem = LF.CondProblem(c)
 		if problem then return problem end
 	end
 	if not ACTIONS[rule.action] or rule.action > 4 then return "Pick what happens." end
 	if not M.allow[rule.action] then return ERRORS.action end
+	if #("R|" .. LF.EncodeRule(rule)) > MAX_MESSAGE then
+		return "This rule is too long: shorten a name or remove a condition."
+	end
 	return nil
 end
 
@@ -534,7 +582,7 @@ end
 -- Main window
 -- ============================================================
 
-local FRAME_W, FRAME_H = 640, 520
+local FRAME_W, FRAME_H = 640, 560
 
 local main = CreateFrame("Frame", "LootFilterFrame", UIParent)
 main:SetSize(FRAME_W, FRAME_H)
@@ -623,7 +671,7 @@ statusText:SetWidth(330)
 -- ============================================================
 
 local rulesPanel = panels[1]
-local ROW_H, VISIBLE_RULES = 34, 8
+local ROW_H, VISIBLE_RULES = 34, 9
 
 local rulesHint = Text(rulesPanel, "GameFontDisableSmall")
 rulesHint:SetPoint("TOPLEFT", 2, -2)
@@ -829,21 +877,21 @@ posOf:SetPoint("LEFT", posDropdown, "RIGHT", -12, 2)
 
 local whenText = Text(editor, "GameFontNormal")
 whenText:SetPoint("TOPLEFT", 12, -44)
-whenText:SetText("When an item matches all of these:")
 
 local condRows = {}
 LF.condRows = condRows
 
-local function DefaultCond(condType)
-	if condType == COND_QUALITY then return { type = condType, op = 0, value = 2, value2 = 0, text = "" } end
-	if condType == COND_ITEM_LEVEL then return { type = condType, op = 2, value = 100, value2 = 0, text = "" } end
-	if condType == COND_SELL_PRICE then return { type = condType, op = 2, value = 100, value2 = 0, text = "" } end
-	if condType == COND_ITEM_TYPE then
-		return { type = condType, op = 0, value = 4, value2 = ANY_SUBCLASS, text = "" }
-	end
-	if condType == COND_CURSED then return { type = condType, op = 0, value = 1, value2 = 0, text = "" } end
-	if condType == COND_ITEM then return { type = condType, op = 0, value = 0, value2 = 0, text = "" } end
-	return { type = COND_NAME, op = 0, value = 0, value2 = 0, text = "" }
+local function DefaultCond(condType, group)
+	local c
+	if condType == COND_QUALITY then c = { type = condType, op = 0, value = 2, value2 = 0, text = "" }
+	elseif condType == COND_ITEM_LEVEL then c = { type = condType, op = 2, value = 100, value2 = 0, text = "" }
+	elseif condType == COND_SELL_PRICE then c = { type = condType, op = 2, value = 100, value2 = 0, text = "" }
+	elseif condType == COND_ITEM_TYPE then c = { type = condType, op = 0, value = 4, value2 = ANY_SUBCLASS, text = "" }
+	elseif condType == COND_CURSED then c = { type = condType, op = 0, value = 1, value2 = 0, text = "" }
+	elseif condType == COND_ITEM then c = { type = condType, op = 0, value = 0, value2 = 0, text = "" }
+	else c = { type = COND_NAME, op = 0, value = 0, value2 = 0, text = "" } end
+	c.group = group or 0
+	return c
 end
 LF.DefaultCond = DefaultCond
 
@@ -956,12 +1004,7 @@ for i = 1, MAX_CONDITIONS do
 
 	row.remove = IconButton(row, "Interface\\Buttons\\UI-GroupLoot-Pass", "Remove condition")
 	row.remove:SetPoint("RIGHT", -8, 0)
-	row.remove:SetScript("OnClick", function()
-		if E.rule and #E.rule.conds > 1 then
-			table.remove(E.rule.conds, i)
-			RenderEditor()
-		end
-	end)
+	row.remove:SetScript("OnClick", function() LF.RemoveCondition(i) end)
 
 	-- Inputs write straight into the edited condition.
 	row.number:SetScript("OnTextChanged", function(self, user)
@@ -998,7 +1041,7 @@ local function InitTypeDropdown(dd, i)
 			info.text = t.label
 			info.checked = E.rule and E.rule.conds[i] and E.rule.conds[i].type == t.id
 			info.func = function()
-				E.rule.conds[i] = DefaultCond(t.id)
+				E.rule.conds[i] = DefaultCond(t.id, E.rule.conds[i] and E.rule.conds[i].group)
 				RenderEditor()
 			end
 			UIDropDownMenu_AddButton(info)
@@ -1105,20 +1148,137 @@ for i, row in ipairs(condRows) do
 	InitValueDropdown(row.valueDD, i)
 end
 
-local addCondBtn = Button(editor, "+ Add condition", 120, 20)
-addCondBtn:SetPoint("TOPLEFT", 14, -60 - MAX_CONDITIONS * 30 - 2)
-addCondBtn:SetScript("OnClick", function()
-	if E.rule and #E.rule.conds < MAX_CONDITIONS then
-		E.rule.conds[#E.rule.conds + 1] = DefaultCond(COND_QUALITY)
-		RenderEditor()
+-- Groups: a header per group (its mode, "+ Condition", remove), the join of
+-- the groups on the "When" line, "+ Add group" below the last group.
+local BIT = { [0] = 1, 2, 4 }
+
+local function SetBit(v, bit, on)
+	v = v or 0
+	if on and not HasBit(v, bit) then return v + bit end
+	if not on and HasBit(v, bit) then return v - bit end
+	return v
+end
+LF.SetBit = SetBit
+
+local joinDD = Dropdown("LootFilterJoinDropdown", editor, 60)
+joinDD:SetPoint("LEFT", whenText, "RIGHT", -8, -2)
+local joinTail = Text(editor, "GameFontNormal")
+joinTail:SetPoint("LEFT", joinDD, "RIGHT", -12, 2)
+joinTail:SetText("of these groups:")
+LF.joinDD = joinDD
+UIDropDownMenu_Initialize(joinDD, function()
+	for _, v in ipairs({ { false, "all" }, { true, "any" } }) do
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = v[2]
+		info.checked = E.rule and JoinAny(E.rule) == v[1]
+		info.func = function()
+			E.rule.logic = SetBit(E.rule.logic, LOGIC_JOIN_ANY, v[1])
+			RenderEditor()
+		end
+		UIDropDownMenu_AddButton(info)
 	end
 end)
-local addCondHint = Text(editor, "GameFontDisableSmall")
-addCondHint:SetPoint("LEFT", addCondBtn, "RIGHT", 8, 0)
-addCondHint:SetText("up to 4, all must match")
+
+local groupHeaders = {}
+LF.groupHeaders = groupHeaders
+for g = 0, MAX_GROUPS - 1 do
+	local h = CreateFrame("Frame", nil, editor)
+	h:SetSize(590, 24)
+	h.label = Text(h, "GameFontNormal")
+	h.label:SetPoint("LEFT", 10, 0)
+	h.label:SetWidth(64)
+	h.modeDD = Dropdown("LootFilterGroupMode" .. g, h, 110)
+	h.modeDD:SetPoint("LEFT", h.label, "RIGHT", -14, -2)
+	h.add = Button(h, "+ Condition", 96, 20)
+	h.add:SetPoint("LEFT", h.modeDD, "RIGHT", -6, 2)
+	h.add:SetScript("OnClick", function() LF.AddCondition(g) end)
+	h.remove = IconButton(h, "Interface\\Buttons\\UI-GroupLoot-Pass", "Remove group")
+	h.remove:SetPoint("RIGHT", -8, 0)
+	h.remove:SetScript("OnClick", function() LF.RemoveGroup(g) end)
+	UIDropDownMenu_Initialize(h.modeDD, function()
+		for _, v in ipairs({ { false, "all of these" }, { true, "any of these" } }) do
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = v[2]
+			info.checked = E.rule and GroupAny(E.rule, g) == v[1]
+			info.func = function()
+				E.rule.logic = SetBit(E.rule.logic, BIT[g], v[1])
+				RenderEditor()
+			end
+			UIDropDownMenu_AddButton(info)
+		end
+	end)
+	groupHeaders[g] = h
+end
+
+local addGroupBtn = Button(editor, "+ Add group", 110, 20)
+addGroupBtn:SetScript("OnClick", function() LF.AddGroup() end)
+local addGroupHint = Text(editor, "GameFontDisableSmall")
+addGroupHint:SetPoint("LEFT", addGroupBtn, "RIGHT", 8, 0)
+addGroupHint:SetText("up to 3 groups and 8 conditions")
+LF.addGroupBtn = addGroupBtn
+
+-- First and last place of group g in the condition list (sorted by group).
+local function GroupRange(rule, g)
+	local first, last
+	for i, c in ipairs(rule.conds) do
+		if (c.group or 0) == g then
+			first = first or i
+			last = i
+		end
+	end
+	return first, last
+end
+
+-- After group g is gone: the groups above move down one number, their bits
+-- with them; one group left needs no join.
+local function CloseGroupGap(rule, g)
+	local old = rule.logic or 0
+	local logic = HasBit(old, LOGIC_JOIN_ANY) and LOGIC_JOIN_ANY or 0
+	for k = 0, MAX_GROUPS - 1 do
+		if k ~= g and HasBit(old, BIT[k]) then logic = logic + BIT[k > g and k - 1 or k] end
+	end
+	for _, c in ipairs(rule.conds) do
+		if (c.group or 0) > g then c.group = c.group - 1 end
+	end
+	if GroupCount(rule) <= 1 then logic = SetBit(logic, LOGIC_JOIN_ANY, false) end
+	rule.logic = logic
+end
+
+function LF.AddCondition(g)
+	local rule = E.rule
+	if not rule or #rule.conds >= MAX_CONDITIONS then return end
+	local _, last = GroupRange(rule, g)
+	table.insert(rule.conds, (last or #rule.conds) + 1, DefaultCond(COND_QUALITY, g))
+	RenderEditor()
+end
+
+function LF.AddGroup()
+	local rule = E.rule
+	if not rule or #rule.conds >= MAX_CONDITIONS or GroupCount(rule) >= MAX_GROUPS then return end
+	rule.conds[#rule.conds + 1] = DefaultCond(COND_QUALITY, GroupCount(rule))
+	RenderEditor()
+end
+
+function LF.RemoveCondition(i)
+	local rule = E.rule
+	if not rule or #rule.conds <= 1 or not rule.conds[i] then return end
+	local g = rule.conds[i].group or 0
+	table.remove(rule.conds, i)
+	if not GroupRange(rule, g) then CloseGroupGap(rule, g) end
+	RenderEditor()
+end
+
+function LF.RemoveGroup(g)
+	local rule = E.rule
+	if not rule or GroupCount(rule) <= 1 then return end
+	for i = #rule.conds, 1, -1 do
+		if (rule.conds[i].group or 0) == g then table.remove(rule.conds, i) end
+	end
+	CloseGroupGap(rule, g)
+	RenderEditor()
+end
 
 local thenText = Text(editor, "GameFontNormal")
-thenText:SetPoint("TOPLEFT", 12, -60 - MAX_CONDITIONS * 30 - 32)
 thenText:SetText("Then:")
 
 local actionRadios = {}
@@ -1126,21 +1286,20 @@ LF.actionRadios = actionRadios
 for i, code in ipairs(ACTION_ORDER) do
 	local a = ACTIONS[code]
 	local radio = CreateFrame("CheckButton", "LootFilterAction" .. code, editor, "UIRadioButtonTemplate")
-	radio:SetPoint("TOPLEFT", 18, -60 - MAX_CONDITIONS * 30 - 50 - (i - 1) * 20)
 	radio.code = code
+	radio.index = i
 	radio.label = Text(editor, "GameFontHighlight")
 	radio.label:SetPoint("LEFT", radio, "RIGHT", 4, 0)
 	radio.label:SetWidth(84)
-	radio.help = Text(editor, "GameFontDisableSmall")
-	radio.help:SetPoint("LEFT", radio.label, "RIGHT", 4, 0)
-	radio.help:SetWidth(470)
-	radio.help:SetText(a.help)
 	radio:SetScript("OnClick", function()
 		if E.rule then E.rule.action = code end
 		RenderEditor()
 	end)
 	actionRadios[code] = radio
 end
+local actionHelp = Text(editor, "GameFontDisableSmall")
+actionHelp:SetWidth(560)
+LF.actionHelp = actionHelp
 
 local editorError = Text(editor, "GameFontRedSmall")
 editorError:SetPoint("BOTTOMLEFT", 14, 14)
@@ -1212,10 +1371,62 @@ RenderEditor = function()
 			row:Hide()
 		end
 	end
-	if #rule.conds < MAX_CONDITIONS then addCondBtn:Enable() else addCondBtn:Disable() end
 
+	-- Layout: the "When" line, each group's header and rows, "+ Add group", the action.
+	local groups = GroupCount(rule)
+	if groups > 1 then
+		whenText:SetText("When an item matches")
+		joinDD:Show()
+		joinTail:Show()
+		UIDropDownMenu_SetText(joinDD, JoinAny(rule) and "any" or "all")
+	else
+		whenText:SetText("When an item matches")
+		joinDD:Hide()
+		joinTail:Hide()
+	end
+	local full = #rule.conds >= MAX_CONDITIONS
+	local y = -66
+	for g = 0, MAX_GROUPS - 1 do
+		local h = groupHeaders[g]
+		if g < groups then
+			h:ClearAllPoints()
+			h:SetPoint("TOPLEFT", 4, y)
+			h:Show()
+			h.label:SetText(groups > 1 and ("Group " .. (g + 1)) or "")
+			UIDropDownMenu_SetText(h.modeDD, GroupAny(rule, g) and "any of these" or "all of these")
+			if full then h.add:Disable() else h.add:Enable() end
+			if groups > 1 then h.remove:Show() else h.remove:Hide() end
+			y = y - 24
+			for i, c in ipairs(rule.conds) do
+				if (c.group or 0) == g then
+					condRows[i]:ClearAllPoints()
+					condRows[i]:SetPoint("TOPLEFT", 16, y)
+					y = y - 28
+				end
+			end
+			y = y - 4
+		else
+			h:Hide()
+		end
+	end
+	if groups < MAX_GROUPS then
+		addGroupBtn:ClearAllPoints()
+		addGroupBtn:SetPoint("TOPLEFT", 14, y)
+		addGroupBtn:Show()
+		addGroupHint:Show()
+		if full then addGroupBtn:Disable() else addGroupBtn:Enable() end
+		y = y - 26
+	else
+		addGroupBtn:Hide()
+		addGroupHint:Hide()
+	end
+
+	thenText:ClearAllPoints()
+	thenText:SetPoint("TOPLEFT", 12, y - 6)
 	for code, radio in pairs(actionRadios) do
 		local a = ACTIONS[code]
+		radio:ClearAllPoints()
+		radio:SetPoint("TOPLEFT", 54 + (radio.index - 1) * 108, y - 4)
 		radio:SetChecked(rule.action == code and 1 or nil)
 		if M.allow[code] then
 			radio:Enable()
@@ -1225,16 +1436,19 @@ RenderEditor = function()
 			radio.label:SetText(Colored("666666", a.label))
 		end
 	end
+	actionHelp:ClearAllPoints()
+	actionHelp:SetPoint("TOPLEFT", 14, y - 28)
+	actionHelp:SetText(ACTIONS[rule.action] and ACTIONS[rule.action].help or "")
 	editorError:SetText(E.error or "")
 end
 LF.RenderEditor = RenderEditor
 
 local function CopyRule(rule)
 	local copy = { id = rule.id or 0, position = rule.position or 0, action = rule.action or 1,
-		enabled = rule.enabled ~= false, conds = {} }
+		enabled = rule.enabled ~= false, logic = rule.logic or 0, conds = {} }
 	for i, c in ipairs(rule.conds) do
 		copy.conds[i] = { type = c.type, op = c.op or 0, value = c.value or 0, value2 = c.value2 or 0,
-			text = c.text or "" }
+			text = c.text or "", group = c.group or 0 }
 	end
 	return copy
 end
@@ -1244,7 +1458,7 @@ function LF.OpenEditor(rule)
 	if rule then
 		E.rule = CopyRule(rule)
 	else
-		E.rule = { id = 0, position = #M.rules + 1, action = 1, enabled = true,
+		E.rule = { id = 0, position = #M.rules + 1, action = 1, enabled = true, logic = 0,
 			conds = { DefaultCond(COND_QUALITY) } }
 	end
 	E.error = nil
