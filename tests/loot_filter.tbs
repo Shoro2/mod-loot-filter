@@ -246,6 +246,8 @@ log 7b - a quest item is never touched, even under a DELETE rule
 as b .lootfilter request F|1
 place 0 705 610 45
 do b destroy 3317
+# a respawn due while the grid was unloaded happens at its first update
+wait 2s
 pick g1 creature:1939 near b
 require g1 alive
 do b approach g1
