@@ -16,9 +16,12 @@
 # Turtle Meat, so kept items are counted with ">= 1". `approach` is a near teleport that completes
 # a moment later, hence the `wait 1s` before the casts. Each kill happens at its own
 # Snapjaw spawn along the river, so a corpse an earlier run left unlooted is not picked again.
+# Steps 4b-4d check the hand-on (2026-10-31): Frosty Spinneret (33629: grey junk, sells for 15s 62c,
+# no disenchant loot, not storable) and Voldrune Legs (36000: green cloth, disenchant loot 15) come
+# from the director's .additem, so the bag scan names the deciding rule for each.
 #   b  one level-80 mage; its rules are cleared at the start and at the end
 name    mod-loot-filter - rules, loot, actions
-timeout 240s
+timeout 300s
 
 bot b mage
 # mod-auto-loot skips any player in a group (mod_auto_loot.cpp: GetGroup()), so no party
@@ -119,7 +122,57 @@ expect output has "|0|1|3712"
 expect output has "LFLS Z|"
 expect b item 3712 >= 1
 
-log 5 - a switched-off KEEP on top does not protect; DELETE takes the whole stack
+log 4b - a rule whose action cannot handle the item hands it on (keep cursed / disenchant / store / sell)
+as b .lootfilter request X
+as b .lootfilter request R|0|0|0|1|5:0:1:0:
+as b .lootfilter request R|0|0|2|1|5:0:0:0:
+as b .lootfilter request R|0|0|4|1|5:0:0:0:
+as b .lootfilter request R|0|0|1|1|5:0:0:0:
+expect output has "LFLS N|4"
+do b destroy 33629
+do b destroy 36000
+do gm target b
+as gm .additem 33629
+as gm .additem 36000
+expect b item 33629 == 1
+expect b item 36000 == 1
+wait 2s
+as b .lootfilter request S
+expect output has "|4|3|3712"
+expect output has "|1|4|33629"
+expect output has "|2|2|36000"
+log 4c - without the store rule the meat goes on to the sell rule
+as b .lootfilter request X
+as b .lootfilter request R|0|0|2|1|5:0:0:0:
+as b .lootfilter request R|0|0|1|1|5:0:0:0:
+expect output has "LFLS N|2"
+wait 2s
+as b .lootfilter request S
+expect output has "|1|2|3712"
+expect output has "|1|2|33629"
+expect output has "|2|1|36000"
+do b destroy 33629
+do b destroy 36000
+log 4d - a loot under the keep cursed / disenchant / store / sell set: the meat goes to the storage
+as b .lootfilter request X
+as b .lootfilter request R|0|0|0|1|5:0:1:0:
+as b .lootfilter request R|0|0|2|1|5:0:0:0:
+as b .lootfilter request R|0|0|4|1|5:0:0:0:
+as b .lootfilter request R|0|0|1|1|5:0:0:0:
+place 0 -353.9 -1101.5 34.3
+pick t8 creature:2408 near b
+require t8 alive
+do b approach t8
+wait 1s
+do b cast 42921 triggered
+do b cast 42921 triggered
+do b cast 42921 triggered
+waitfor t8 dead timeout 5s
+wait 2s
+waitfor t8 missing timeout 15s
+expect b item 3712 == 0
+
+log 5 -a switched-off KEEP on top does not protect; DELETE takes the whole stack
 as b .lootfilter request X
 as b .lootfilter request R|0|0|3|1|0:2:1:0:
 as b .lootfilter request R|0|1|0|0|6:0:3712:0:
@@ -206,4 +259,6 @@ as b .lootfilter request F|1
 as b .lootfilter request C|1
 do b destroy 3712
 do b destroy 3317
+do b destroy 33629
+do b destroy 36000
 log loot_filter done
